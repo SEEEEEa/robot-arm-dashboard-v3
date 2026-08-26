@@ -1,0 +1,960 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D 模組化機械臂數位孿生</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #1e1e2e; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        
+        #ui-layer { 
+            position: absolute; top: 20px; left: 20px; color: #cdd6f4; pointer-events: none; z-index: 10; 
+            background: rgba(49, 50, 68, 0.85); padding: 20px; border-radius: 15px; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5); min-width: 220px;
+            backdrop-filter: blur(4px);
+            display: flex; flex-direction: column;
+            max-height: 90vh; 
+        }
+        
+        #ui-header { pointer-events: auto; cursor: pointer; user-select: none; text-align: center; padding-bottom: 5px; }
+        #ui-header h2 { margin: 0; text-align: left; }
+        #toggleIcon { 
+            font-size: 12px; color: #a6adc8; margin-top: 8px; font-weight: bold; 
+            transition: 0.3s; background: rgba(255,255,255,0.1); border-radius: 10px; padding: 4px;
+        }
+        #toggleIcon:hover { background: rgba(255,255,255,0.2); color: #cdd6f4; }
+
+        #ui-content { pointer-events: none; overflow-y: auto; padding-right: 5px; transition: max-height 0.3s ease, opacity 0.3s ease; }
+        #ui-content::-webkit-scrollbar { width: 6px; }
+        #ui-content::-webkit-scrollbar-thumb { background: #585b70; border-radius: 3px; }
+
+        .status-badge { display: inline-block; padding: 6px 12px; border-radius: 15px; font-weight: bold; margin-bottom: 10px; }
+        .status-READY { background: #a6e3a1; color: #111; }
+        .status-WORKING { background: #89b4fa; color: #111; }
+        .status-ERROR { background: #f38ba8; color: #111; }
+        .status-OFFLINE { background: #6c7086; color: #111; }
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+        
+        #btnArm, #baseRotationSelect { pointer-events: auto; }
+
+        @media (max-width: 768px) {
+            #ui-layer { left: 10px; top: 10px; right: 10px; padding: 10px; min-width: unset; max-height: 30vh; }
+            #btnArm, #baseSettings, .hint, #selectionPanel, #angleListContainer { display: none !important; }
+            #ui-header h2 { font-size: 16px; }
+            #toggleIcon { font-size: 10px; padding: 2px; }
+
+            #mobileControlOverlay {
+                display: block !important; visibility: hidden; opacity: 0;
+                position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+                width: 90%; background: rgba(49, 50, 68, 0.95); padding: 12px 20px; 
+                border-radius: 15px; z-index: 100;
+                transition: opacity 0.3s ease, visibility 0.3s;
+                touch-action: none; 
+                user-select: none; pointer-events: auto;
+            }
+            #mobileControlOverlay.active { visibility: visible; opacity: 1; }
+            .slider-label { color: #f9e2af; font-weight: bold; margin-bottom: 5px; display: block; text-align: center; font-size: 14px; }
+            #mobileSlider { width: 100%; height: 8px; -webkit-appearance: none; background: #585b70; border-radius: 5px; outline: none; }
+            #mobileSlider::-webkit-slider-thumb { -webkit-appearance: none; width: 28px; height: 28px; background: #89b4fa; border-radius: 50%; border: 3px solid #f5c2e7; }
+        }
+
+        #mobileControlOverlay { display: none; }
+
+        #orientation-mask {
+            display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background-color: #1e1e2e; z-index: 10000; justify-content: center; align-items: center;
+            color: #cdd6f4; text-align: center;
+        }
+        .mask-content .rotate-icon { font-size: 50px; margin-bottom: 20px; animation: rotateAnim 2s infinite ease-in-out; }
+        @keyframes rotateAnim { 0% { transform: rotate(0deg); } 50% { transform: rotate(-90deg); } 100% { transform: rotate(0deg); } }
+        @media screen and (orientation: landscape) and (max-width: 1024px) { #orientation-mask { display: flex; } }
+    </style>
+</head>
+<body>
+    <div id="orientation-mask">
+        <div class="mask-content">
+            <div class="rotate-icon">🔄</div>
+            <p>請將手機轉回直向模式</p>
+            <span>以獲得最佳操控體驗</span>
+        </div>
+    </div>
+
+    <div id="ui-layer">
+        <div id="ui-header" onclick="toggleUI()">
+            <h2> 3D 數位監控</h2>
+            <div id="toggleIcon">▼ 展開面板 ▼</div>
+        </div>
+        <div id="ui-content">
+            <div style="margin-top: 15px;"></div>
+            <div id="statusBadge" class="status-badge status-OFFLINE">等待連線...</div>
+            <div>系統總節點數: <span id="totalCount">0</span></div>
+            <div style="margin-top: 5px;">控制模式: <span id="modeDisplay" style="color:#a6e3a1; font-weight:bold;">🌐 網頁主控</span></div>
+            <div style="color: #f38ba8; font-weight: bold; margin-top: 5px;" id="errorMsg"></div>
+            <button id="btnArm" style="display: none; background: #a6e3a1; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; font-weight: bold; margin-top: 10px; width: 100%;">🔓 網頁解鎖通電</button>
+            <div id="baseSettings" style="margin-top: 15px; border-top: 1px solid #45475a; padding-top: 10px;">
+                <strong>⚙️ 實體底座設定：</strong>
+                <select id="baseRotationSelect" style="background: #313244; color: #a6e3a1; border: 1px solid #585b70; border-radius: 4px; padding: 4px; font-weight: bold; width: 100%; margin-top: 5px;">
+                    <option value="0">0° (預設)</option>
+                    <option value="90">90° (逆時針)</option>
+                    <option value="180">180°</option>
+                    <option value="-90">270° (順時針)</option>
+                </select>
+            </div>
+            <div id="selectionPanel" style="margin-top: 15px; border-top: 1px solid #45475a; padding-top: 10px;"><div id="selectedInfo">當前操控節點: ID 0</div></div>
+            <div id="angleListContainer" style="margin-top: 15px; border-top: 1px solid #45475a; padding-top: 10px;">
+                <strong> 關節即時角度：</strong>
+                <div id="angleListData" style="font-family: monospace; margin-top: 5px;">等待數據...</div>
+            </div>
+            <div id="endEffectorPanel" style="margin-top: 15px; border-top: 1px solid #45475a; padding-top: 10px;">
+                <strong>🎯 絕對空間座標：</strong>
+                <div id="xyzDisplay" style="color: #f9e2af; font-weight: bold;">X: 0.0 <br>Y: 0.0 <br>Z: 0.0</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="mobileControlOverlay">
+        <span class="slider-label" id="mLabel">請點擊 3D 關節進行控制</span>
+        <input type="range" id="mobileSlider" min="0" max="1000" value="500">
+    </div>
+
+    <!-- 🌟 工具面板:分層顯示 / 手動關節測試 / IK逆向運動學求解 -->
+    <div id="debugPanel" style="position:absolute; top:20px; right:20px; z-index:20; background:rgba(30,30,46,0.92); color:#cdd6f4; padding:16px; border-radius:12px; width:280px; font-size:13px; max-height:92vh; overflow-y:auto; box-shadow:0 4px 15px rgba(0,0,0,0.5);">
+        <div style="font-weight:bold; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
+            🔧 模擬工具
+            <button id="debugLoadMock" style="font-size:11px; background:#89b4fa; color:#111; border:none; border-radius:6px; padding:4px 8px; cursor:pointer;">載入測試拓樸</button>
+        </div>
+
+        <label style="display:block; margin-bottom:4px; color:#a6adc8;">顯示到第幾層</label>
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+            <button id="debugLayerMinus" style="flex:0 0 auto; background:#585b70; color:#cdd6f4; border:none; border-radius:6px; width:32px; height:32px; cursor:pointer; font-size:16px;">−</button>
+            <div id="debugLayerLabel" style="flex:1; text-align:center; font-weight:bold; color:#a6e3a1; font-size:16px;">6</div>
+            <button id="debugLayerPlus" style="flex:0 0 auto; background:#585b70; color:#cdd6f4; border:none; border-radius:6px; width:32px; height:32px; cursor:pointer; font-size:16px;">＋</button>
+        </div>
+        <div id="debugLayerDesc" style="color:#a6adc8; font-size:12px; margin-bottom:6px;"></div>
+        <div style="color:#6c7086; font-size:11px; margin-bottom:12px;">🔒 連接件位置已校正完成並鎖定,不會再被此面板調整</div>
+
+        <hr style="border-color:#45475a; margin:12px 0;">
+
+        <div style="font-weight:bold; color:#89b4fa; margin-bottom:6px;">手動關節角度測試</div>
+        <div style="color:#6c7086; font-size:11px; margin-bottom:8px;">用來驗證每顆馬達實際轉動方向,是否跟IK數學模型假設的軸向一致</div>
+        <div id="manualJointSliders"></div>
+
+        <hr style="border-color:#45475a; margin:12px 0;">
+
+        <div style="font-weight:bold; color:#f9e2af; margin-bottom:8px;">🎯 IK 目標求解</div>
+
+        <div style="display:flex; border:1px solid #585b70; border-radius:6px; overflow:hidden; margin-bottom:10px; font-size:12px;">
+            <button id="modePosOnly" style="flex:1; padding:6px; background:#f9e2af; color:#111; border:none; cursor:pointer; font-weight:bold;">僅位置(XYZ)</button>
+            <button id="modePosDir" style="flex:1; padding:6px; background:#313244; color:#a6adc8; border:none; cursor:pointer;">位置+方向</button>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; margin-bottom:8px;">
+            <div><label style="font-size:11px; color:#a6adc8;">X (水平)</label><input id="ikX" type="number" value="300" style="width:100%; background:#313244; color:#a6e3a1; border:1px solid #585b70; border-radius:4px; padding:4px;"></div>
+            <div><label style="font-size:11px; color:#a6adc8;">Y (水平)</label><input id="ikY" type="number" value="0" style="width:100%; background:#313244; color:#a6e3a1; border:1px solid #585b70; border-radius:4px; padding:4px;"></div>
+            <div><label style="font-size:11px; color:#a6adc8;">Z (高度⬆)</label><input id="ikZ" type="number" value="300" style="width:100%; background:#313244; color:#a6e3a1; border:1px solid #585b70; border-radius:4px; padding:4px;"></div>
+        </div>
+        <div id="ikDirWrapper">
+            <div id="ikDirSliders"></div>
+        </div>
+        <button id="ikSolveBtn" style="width:100%; margin-top:8px; background:#f9e2af; color:#111; border:none; border-radius:6px; padding:8px; cursor:pointer; font-weight:bold;">求解並套用</button>
+        <div id="ikStatus" style="margin-top:8px; font-size:12px; color:#a6adc8;"></div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+
+    <script>
+        const uiContent = document.getElementById('ui-content');
+        const toggleIcon = document.getElementById('toggleIcon');
+        let isUICollapsed = window.innerWidth <= 768; 
+
+        function toggleUI() { isUICollapsed = !isUICollapsed; updateUIState(); }
+        function updateUIState() {
+            if (isUICollapsed) { uiContent.style.display = 'none'; toggleIcon.innerHTML = '▼ 點擊展開面板 ▼'; }
+            else { uiContent.style.display = 'block'; toggleIcon.innerHTML = '▲ 點擊折疊面板 ▲'; }
+        }
+        updateUIState();
+
+        const scene = new THREE.Scene();
+        scene.add(new THREE.GridHelper(200, 50, 0x89b4fa, 0x313244));
+        const axesHelper = new THREE.AxesHelper(100); scene.add(axesHelper);
+
+        function createAxisLabel(text, colorStr) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 128; canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = 'rgba(0, 0, 0, 0)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.font = 'bold 48px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillStyle = colorStr; ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+            const texture = new THREE.CanvasTexture(canvas);
+            const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false }));
+            sprite.scale.set(20, 10, 1);
+            return sprite;
+        }
+
+        let labelX = createAxisLabel('+X', '#f38ba8');
+        let labelY = createAxisLabel('+Y', '#a6e3a1');
+        let labelZ = createAxisLabel('+Z', '#89b4fa');
+        scene.add(labelX); scene.add(labelY); scene.add(labelZ);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100000);
+        camera.position.set(120, 100, 180);
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true; controls.target.set(0, 50, 0);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8); dirLight.position.set(100, 150, 50); scene.add(dirLight);
+
+        const globalBaseGroup = new THREE.Group(); scene.add(globalBaseGroup);
+        const modulesGroup = new THREE.Group(); globalBaseGroup.add(modulesGroup); 
+        // 🌟 隱形的末端追蹤點，用來精準抓取座標
+        const endEffectorMarker = new THREE.Object3D(); 
+
+        let modules = {}; let latestTopology = []; let serverAngles = {}; let selectedNodeId = 0;
+        let currentTopologyStr = ""; 
+        let baseStlGeometry, pivotStlGeometry, bodyStlGeometry;
+        let shortConnectorGeometry, rodGeometry, rod2Geometry; // 🌟 新增:短轉接頭、延長桿、延長桿2
+        let baseMesh = null; // 🌟 宣告底座 Mesh 變數以利變色控制
+        let previousStatus = "OFFLINE";
+        const stlLoader = new THREE.STLLoader();
+
+        function addBlackEdges(mesh) {
+            const edges = new THREE.EdgesGeometry(mesh.geometry, 30);
+            mesh.add(new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x111111 })));
+        }
+
+        stlLoader.load('./底座成品2.stl', g => {
+            // ⚠️ 修正:實際分析發現這個底座檔案裡,Y軸本身就是高度方向(頂端窄圓柱在Y最大處),
+            // 不需要像之前那樣做Z->Y的軸向旋轉,那個判斷是錯的
+            g.scale(0.5, 0.5, 0.5);
+            g.computeBoundingBox();
+            const totalHeight = g.boundingBox.max.y - g.boundingBox.min.y;
+            // 🌟 水平置中:用頂端圓柱(馬達1掛載面)本身的中心來置中,不是整體外框中心
+            g.translate(-71.78, 0, -113.90);
+            g.computeBoundingBox();
+            baseMesh = new THREE.Mesh(g, new THREE.MeshPhongMaterial({ color: 0xf5c2e7 }));
+            baseMesh.position.y = -g.boundingBox.min.y; addBlackEdges(baseMesh); globalBaseGroup.add(baseMesh);
+            modulesGroup.position.y = totalHeight; // 🌟 馬達1會自動疊在圓柱頂端,不管底座多高都對
+            rebuildTopology(latestTopology);
+        });
+        stlLoader.load('./pivot.stl', g => { g.rotateY(Math.PI); g.scale(0.5, 0.5, 0.5); pivotStlGeometry = g; rebuildTopology(latestTopology); });
+        stlLoader.load('./body.stl', g => { g.rotateY(Math.PI); g.scale(0.5, 0.5, 0.5); bodyStlGeometry = g; rebuildTopology(latestTopology); });
+
+        // 🌟 新增:短轉接頭(取代原本的pivot.stl,用在馬達1-2、3-4、4-5之間)
+        // translate 是把量測到的"起點端中心"平移到原點(0,0,0),方便後續定位
+        // scale(0.5,0.5,0.5) 要跟其他模型維持同一套縮放比例,不然大小會對不上
+        stlLoader.load('./短轉接頭.stl', g => {
+            g.translate(-0.4, -11.5, -28.8);
+            g.scale(0.5, 0.5, 0.5);
+            g.computeBoundingBox();
+            shortConnectorGeometry = g;
+            rebuildTopology(latestTopology);
+        });
+
+        // 🌟 新增:延長桿2(只用在馬達2-3之間,L形彎折)
+        stlLoader.load('./延長桿2.stl', g => {
+            g.translate(-13.9, -0.9, -28.6);
+            g.scale(0.5, 0.5, 0.5);
+            g.computeBoundingBox();
+            rod2Geometry = g;
+            rebuildTopology(latestTopology);
+        });
+
+        // 🌟 新增:延長桿(只用在馬達5-夾爪之間,L形彎折)
+        stlLoader.load('./延長桿.stl', g => {
+            g.translate(-2.4, -8.3, -28.8);
+            g.scale(0.5, 0.5, 0.5);
+            g.computeBoundingBox();
+            rodGeometry = g;
+            rebuildTopology(latestTopology);
+        });
+
+        let gripperGeometry;
+        // 🌟 新增:夾爪組件,translate把假設的安裝端(X座標接近0這端)平移到原點
+        // ⚠️ 待確認:哪一端是接延長桿的安裝端,如果方向反了,把 -0.6 那組數字換成用另一端的座標即可
+        stlLoader.load('./組合件1.stl', g => {
+            g.translate(-0.6, -40.3, -67.1);
+            g.scale(0.5, 0.5, 0.5);
+            g.computeBoundingBox();
+            gripperGeometry = g;
+            rebuildTopology(latestTopology);
+        });
+
+        // 🌟 依照節點ID,決定這個位置該額外插入哪個連接件模型
+        // (這是插在pivot跟下一個模組之間的東西,不是取代pivot)
+        function getConnectorGeometry(nodeId) {
+            if (nodeId === 2 && rod2Geometry) return rod2Geometry;      // 馬達2後面接延長桿2(到馬達3)
+            if (nodeId === 5 && rodGeometry) return rodGeometry;        // 馬達5後面接延長桿(到夾爪)
+            if (shortConnectorGeometry) return shortConnectorGeometry;  // 其餘用短轉接頭
+            return null; // 新模型還沒載入完成時,先不顯示連接件,避免用pivot誤頂
+        }
+
+        // 🌟 分層校正:只顯示鏈路的前 N 層,方便一層一層確認
+        // 0=只有底座, 1=+馬達1轉軸+外殼, 2=+短轉接頭+馬達2轉軸+外殼, 依此類推, 6=完整含夾爪
+        // 已完成校正,預設直接顯示完整鏈路
+        let DEBUG_MAX_LAYER = 6;
+        // short: 已依實測幾何算出第一版起始值(繞Z軸轉90度,讓自身57mm的長度方向對齊到場景的Y軸延伸方向)
+        // rod2/rod: 還沒開始校正,暫時維持預設值
+        const DEFAULT_CONNECTOR_CONFIG = {
+            short: { pos: [-31, 10.5, 0], rot: [180, 0, 270], childOffset: [-39.5, 24, 0], childRot: [180, 0, 90] },
+            rod2:  { pos: [-78.5, -5, 0], rot: [180, 0, 270], childOffset: [-64, -15.5, 0], childRot: [180, 0, 0] },
+            rod:   { pos: [-67, -53, 0], rot: [180, 0, 270], childOffset: [-65, -40, 0], childRot: [0, 0, 180] },
+        };
+        // 🌟 連接件關係已校正完成並鎖定,不再提供UI編輯
+        const CONNECTOR_CONFIG = DEFAULT_CONNECTOR_CONFIG;
+
+        function connectorTypeForNode(nodeId) {
+            if (nodeId === 2) return 'rod2';
+            if (nodeId === 5) return 'rod';
+            return 'short';
+        }
+
+        const MOCK_TOPOLOGY = [
+            { id: 1, face: 0 }, { id: 2, face: 0 }, { id: 3, face: 0 },
+            { id: 4, face: 0 }, { id: 5, face: 0 },
+        ];
+
+        const ws = new WebSocket("wss://robot-arm-u40p.onrender.com");
+
+        // 🌟 新增 1：當網頁成功連上 Render 伺服器時
+        ws.onopen = () => {
+            document.getElementById('statusBadge').innerText = "伺服器已連線 (等待S3)";
+            document.getElementById('statusBadge').className = "status-badge status-READY";
+            document.getElementById('errorMsg').innerText = ""; // 清除錯誤訊息
+        };
+
+        // 🌟 新增 2：當網頁與伺服器斷線時 (可能是 Render 休眠，或是你沒網路)
+        ws.onclose = () => {
+            document.getElementById('statusBadge').innerText = "伺服器斷線/喚醒中";
+            document.getElementById('statusBadge').className = "status-badge status-OFFLINE";
+        };
+
+        // 🌟 新增 3：當發生網路錯誤時
+        ws.onerror = (error) => {
+            document.getElementById('statusBadge').innerText = "網頁連線錯誤";
+            document.getElementById('statusBadge').className = "status-badge status-ERROR";
+        };
+
+        // 原本的接收 S3 訊息邏輯
+        // 🌟 修復 2：網頁端看門狗機制
+        let s3Watchdog;
+        function resetS3Watchdog() {
+            clearTimeout(s3Watchdog);
+            s3Watchdog = setTimeout(() => {
+                document.getElementById('statusBadge').innerText = "S3 主板已離線";
+                document.getElementById('statusBadge').className = "status-badge status-ERROR";
+            }, 2000); // 只要 2 秒沒收到 S3 的廣播，就判定斷線！
+        }
+
+        ws.onmessage = e => {
+    const data = JSON.parse(e.data);
+    
+    if(data.status) resetS3Watchdog(); 
+    
+    if (data.status === "WORKING") {
+        latestTopology = data.topology || [];
+        latestTopology.forEach(n => serverAngles[n.id] = n.angle);
+        
+        const newTopoStr = latestTopology.map(n => `${n.id}-${n.face}`).join('|');
+        if (newTopoStr !== currentTopologyStr) {
+            rebuildTopology(latestTopology);
+            currentTopologyStr = newTopoStr;
+        }
+
+        // 🌟 核心修復 1：當系統「剛結束拓樸」進入 WORKING 狀態時，強制將虛擬滑桿對齊真實角度！
+        if (previousStatus !== "WORKING" && selectedNodeId > 0) {
+            document.getElementById('mobileSlider').value = serverAngles[selectedNodeId] || 500;
+            console.log(`[同步] 拓樸完成，滑桿已自動對齊 ID ${selectedNodeId} 實際角度：${serverAngles[selectedNodeId]}`);
+        }
+    }
+
+    // 🌟 更新狀態追蹤器
+    if (data.status) {
+        previousStatus = data.status; 
+    }
+    
+    updateSystemUI(data); 
+};
+
+        function updateSystemUI(data) {
+    document.getElementById('totalCount').innerText = data.total || 0;
+    document.getElementById('statusBadge').innerText = data.status;
+    document.getElementById('statusBadge').className = `status-badge status-${data.status}`;
+
+    // 🌟 核心修復 2：在拓樸掃描 (非 WORKING) 期間，禁用滑桿以防手賤亂改！
+    const mSlider = document.getElementById('mobileSlider');
+    if (data.status === "WORKING") {
+        mSlider.disabled = false;
+        mSlider.style.opacity = "1"; // 恢復正常亮度
+    } else {
+        mSlider.disabled = true;
+        mSlider.style.opacity = "0.4"; // 變暗提示不可用
+    }
+
+            // 🌟 修復 1：動態換算並印出真實度數！
+            if (data.status === "WORKING" && data.topology) {
+                let angleStr = "";
+                data.topology.forEach(n => {
+                    // 將 0~1000 的數值，對應到 -120° ~ +120° (每單位 0.24 度)
+                    let degree = ((n.angle - 500) * 0.24).toFixed(1); 
+                    angleStr += `ID ${n.id}: <span style="color:#a6e3a1">${degree}°</span><br>`;
+                });
+                document.getElementById('angleListData').innerHTML = angleStr || "無數據";
+            }
+        }
+
+        function rebuildTopology(topo) {
+            if (!pivotStlGeometry || !bodyStlGeometry || !baseMesh) return;
+            // 🌟 分層校正:只保留 id <= DEBUG_MAX_LAYER 的節點,其餘節點暫時不顯示
+            topo = topo.filter(n => n.id <= DEBUG_MAX_LAYER);
+            while(modulesGroup.children.length > 0) modulesGroup.remove(modulesGroup.children[0]);
+            modules = {};
+            topo.forEach(node => {
+                const group = new THREE.Group(); const rotator = new THREE.Group(); group.add(rotator);
+                // 🌟 修正:pivot是每個模組本身固有的轉軸,永遠都是pivotStlGeometry,不會被連接件取代
+                const pMesh = new THREE.Mesh(pivotStlGeometry, new THREE.MeshPhongMaterial({ color: 0xa6adc8 }));
+                const bMesh = new THREE.Mesh(bodyStlGeometry, new THREE.MeshPhongMaterial({ color: 0xf9e2af }));
+                rotator.add(bMesh); group.add(pMesh); addBlackEdges(pMesh); addBlackEdges(bMesh);
+                group.userData = { id: node.id, rotator: rotator }; pMesh.userData = { id: node.id, type: 'pivot' }; bMesh.userData = { id: node.id, type: 'body' };
+                modules[node.id] = group;
+            });
+            topo.forEach(node => {
+                if (node.id === 1) modulesGroup.add(modules[1]);
+                const child = modules[node.id + 1];
+                const ctype = connectorTypeForNode(node.id);
+                const cfg = CONNECTOR_CONFIG[ctype];
+                if (child) {
+                    if (node.face === 0) {
+                        child.position.set(cfg.childOffset[0], cfg.childOffset[1], cfg.childOffset[2]);
+                        child.rotation.set(
+                            THREE.MathUtils.degToRad(cfg.childRot[0]),
+                            THREE.MathUtils.degToRad(cfg.childRot[1]),
+                            THREE.MathUtils.degToRad(cfg.childRot[2])
+                        );
+                    } else {
+                        child.position.set(cfg.childOffset[0]-20, cfg.childOffset[1]-20, cfg.childOffset[2]);
+                        child.rotation.set(
+                            THREE.MathUtils.degToRad(cfg.childRot[0]),
+                            THREE.MathUtils.degToRad(cfg.childRot[1]),
+                            THREE.MathUtils.degToRad(cfg.childRot[2]) + Math.PI/2
+                        );
+                    }
+
+                    // 🌟 在這個模組跟下一個模組之間,額外插入連接件(短轉接頭或延長桿)
+                    const connectorGeo = getConnectorGeometry(node.id);
+                    if (connectorGeo) {
+                        const cMesh = new THREE.Mesh(connectorGeo, new THREE.MeshPhongMaterial({ color: 0xcba6f7 }));
+                        addBlackEdges(cMesh);
+                        cMesh.userData = { id: node.id, type: 'connector' };
+                        cMesh.position.set(cfg.pos[0], cfg.pos[1], cfg.pos[2]);
+                        cMesh.rotation.set(
+                            THREE.MathUtils.degToRad(cfg.rot[0]),
+                            THREE.MathUtils.degToRad(cfg.rot[1]),
+                            THREE.MathUtils.degToRad(cfg.rot[2])
+                        );
+                        modules[node.id].userData.rotator.add(cMesh);
+                    }
+
+                    modules[node.id].userData.rotator.add(child);
+                }
+            });
+
+            // 🌟 夾爪不是拓樸資料裡的節點,獨立處理:接在模組5的後面
+            if (DEBUG_MAX_LAYER >= 6 && modules[5] && gripperGeometry) {
+                const rodCfg = CONNECTOR_CONFIG.rod;
+
+                const rMesh = new THREE.Mesh(rodGeometry || pivotStlGeometry, new THREE.MeshPhongMaterial({ color: 0xcba6f7 }));
+                addBlackEdges(rMesh);
+                rMesh.userData = { id: 5, type: 'connector' };
+                rMesh.position.set(rodCfg.pos[0], rodCfg.pos[1], rodCfg.pos[2]);
+                rMesh.rotation.set(
+                    THREE.MathUtils.degToRad(rodCfg.rot[0]),
+                    THREE.MathUtils.degToRad(rodCfg.rot[1]),
+                    THREE.MathUtils.degToRad(rodCfg.rot[2])
+                );
+                modules[5].userData.rotator.add(rMesh);
+
+                const gMesh = new THREE.Mesh(gripperGeometry, new THREE.MeshPhongMaterial({ color: 0x94e2d5 }));
+                addBlackEdges(gMesh);
+                gMesh.userData = { id: 6, type: 'gripper' };
+                gMesh.position.set(rodCfg.childOffset[0], rodCfg.childOffset[1], rodCfg.childOffset[2]);
+                gMesh.rotation.set(
+                    THREE.MathUtils.degToRad(rodCfg.childRot[0]),
+                    THREE.MathUtils.degToRad(rodCfg.childRot[1]),
+                    THREE.MathUtils.degToRad(rodCfg.childRot[2])
+                );
+                modules[5].userData.rotator.add(gMesh);
+            }
+            
+            let maxAxisLen = 100;
+            if (topo.length > 0) {
+                maxAxisLen = Math.max(100, topo.length * 44.5 + 22.5);
+                
+                // 🌟 修復 3：把追蹤點放在最後一顆積木的「頂端」(高度 44.5)，這樣抓出來的座標才會是準的！
+                const lastNodeId = topo[topo.length - 1].id;
+                endEffectorMarker.position.set(0, 44.5, 0); 
+                modules[lastNodeId].userData.rotator.add(endEffectorMarker);
+            }
+            axesHelper.scale.set(1, maxAxisLen / 100, 1);
+            labelX.position.set(110, 0, 0); labelY.position.set(0, maxAxisLen + 5, 0); labelZ.position.set(0, 0, 110);
+
+            selectModule(selectedNodeId);
+        }
+
+        function selectModule(id) {
+            const mOverlay = document.getElementById('mobileControlOverlay');
+            if (selectedNodeId && selectedNodeId !== 0 && selectedNodeId !== id) {
+                if (ws.readyState === 1) ws.send(JSON.stringify({ cmd: 'WEB_JOY', id: selectedNodeId, dir: 0 }));
+            }
+            
+            // 處理積木變色
+            for (let mid in modules) {
+                modules[mid].traverse(c => {
+                    if (c.isMesh && c.userData.type === 'pivot') c.material.color.setHex(mid == id ? 0x89b4fa : 0xa6adc8);
+                    if (c.isMesh && c.userData.type === 'body') c.material.color.setHex(mid == id ? 0x89b4fa : 0xf9e2af);
+                });
+            }
+            
+            // 🌟 修復 2：處理底座 (ID 0) 的變色，確保按上下鍵時視覺回饋正確！
+            if (baseMesh) {
+                //baseMesh.material.color.setHex(id === 0 ? 0x89b4fa : 0xf5c2e7);
+            }
+
+            selectedNodeId = id;
+            document.getElementById('selectedInfo').innerText = `當前操控節點: ID ${id || 0}`;
+            
+            if (window.innerWidth <= 768) {
+                if (id > 0) {
+                    mOverlay.classList.add('active');
+                    document.getElementById('mobileSlider').value = serverAngles[id] || 500;
+                    document.getElementById('mLabel').innerText = `控制 ID ${id} 轉軸`;
+                } else mOverlay.classList.remove('active');
+            }
+        }
+
+        const raycaster = new THREE.Raycaster(); const mouse = new THREE.Vector2();
+        renderer.domElement.addEventListener('pointerdown', e => {
+            mouse.x = (e.clientX / window.innerWidth) * 2 - 1; mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            
+            // 同時偵測積木和底座
+            const objectsToIntersect = [...modulesGroup.children, globalBaseGroup];
+            const isects = raycaster.intersectObjects(objectsToIntersect, true);
+            
+            if (isects.length > 0) {
+                let o = isects[0].object; 
+                // 如果點到底座
+                if (o === baseMesh) { selectModule(0); return; }
+                // 如果點到積木
+                while (o && (!o.userData || !o.userData.id)) o = o.parent;
+                if (o && o.userData) selectModule(o.userData.id);
+            } else selectModule(0);
+        });
+
+        const baseRotationSelect = document.getElementById('baseRotationSelect');
+        if (baseRotationSelect) {
+            baseRotationSelect.addEventListener('change', (e) => {
+                modulesGroup.rotation.y = parseInt(e.target.value) * (Math.PI / 180);
+                e.target.blur();
+            });
+        }
+
+        const mSlider = document.getElementById('mobileSlider');
+        mSlider.addEventListener('touchstart', e => e.stopPropagation(), {passive: false});
+        mSlider.addEventListener('touchmove', e => e.stopPropagation(), {passive: false});
+        mSlider.addEventListener('input', e => {
+            if (selectedNodeId > 0 && ws.readyState === 1) {
+                ws.send(JSON.stringify({ cmd: 'SET_POS', id: selectedNodeId, pos: parseInt(e.target.value) }));
+            }
+        });
+
+        window.addEventListener('keydown', e => {
+            // 🛡️ 防連發護盾：阻擋作業系統按鍵長按導致的網路塞車
+            if (e.repeat) return; 
+
+            // 🌟 空白鍵：全機平滑歸零
+            if (e.code === 'Space') { 
+                e.preventDefault(); 
+                if (ws.readyState === 1) ws.send(JSON.stringify({cmd: 'RESET_ALL'})); 
+                return; 
+            }
+            
+            // 🌟 N 鍵：切換 網頁主控 / 實體遙控 模式
+            if (e.code === 'KeyN') {
+                e.preventDefault();
+                if (ws.readyState === 1) ws.send(JSON.stringify({cmd: 'TOGGLE_MODE'}));
+                return;
+            }
+
+            // 🌟 上下鍵：無縫選取積木
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                e.preventDefault();
+                let maxId = latestTopology.length;
+                let currentId = selectedNodeId || 0;
+                
+                if (e.key === 'ArrowUp' && currentId < maxId) {
+                    selectModule(currentId + 1);
+                } else if (e.key === 'ArrowDown' && currentId > 0) {
+                    selectModule(currentId - 1);
+                }
+                return;
+            }
+
+            // 🌟 左右鍵：控制目前選取積木的馬達正反轉
+            if (selectedNodeId > 0) {
+                let dir = 0;
+                if (e.key === 'ArrowRight') dir = 1; 
+                if (e.key === 'ArrowLeft') dir = -1;
+                
+                if (dir !== 0 && ws.readyState === 1) {
+                    ws.send(JSON.stringify({cmd: 'WEB_JOY', id: selectedNodeId, dir: dir}));
+                }
+            }
+        });
+
+        window.addEventListener('keyup', e => {
+            if (selectedNodeId > 0 && ['ArrowRight', 'ArrowLeft'].includes(e.key)) {
+                ws.send(JSON.stringify({cmd: 'WEB_JOY', id: selectedNodeId, dir: 0}));
+            }
+        });
+
+        let worldVec = new THREE.Vector3();
+        function animate() {
+            requestAnimationFrame(animate); controls.update();
+            for (let id in serverAngles) if (modules[id]) {
+                const target = (serverAngles[id] - 500) * (240 / 1000) * (Math.PI / 180);
+                modules[id].userData.rotator.rotation.y += (target - modules[id].userData.rotator.rotation.y) * 0.15;
+            }
+            if (latestTopology.length > 0) {
+                // 🌟 修復 3：從最後一顆積木頂端的 Marker 提取真實末端座標！
+                endEffectorMarker.getWorldPosition(worldVec);
+                // 🌟 這裡把場景原生的Y(高度)顯示成Z、Z(深度)顯示成Y,
+                // 對應我們IK數學模型的慣例(Z=高度,XY=水平面),這樣輸入輸出的座標語意才會一致
+                document.getElementById('xyzDisplay').innerHTML = `X(水平): ${(worldVec.x*2).toFixed(1)} <br>Y(水平): ${(worldVec.z*2).toFixed(1)} <br>Z(高度⬆): ${(worldVec.y*2).toFixed(1)}`;
+            } else {
+                document.getElementById('xyzDisplay').innerHTML = `X: 0.0 <br>Y: 0.0 <br>Z: 0.0`;
+            }
+            renderer.render(scene, camera);
+        }
+        animate();
+        window.addEventListener('resize', () => { camera.aspect = window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
+
+        // ======================================================
+        // 🌟 模擬工具面板邏輯
+        // ======================================================
+        const debugLayerLabel = document.getElementById('debugLayerLabel');
+        const debugLayerDesc = document.getElementById('debugLayerDesc');
+
+        const LAYER_DESCRIPTIONS = [
+            '只有底座,還沒加任何模組',
+            '+ 馬達1 轉軸 + 外殼',
+            '+ 短轉接頭 + 馬達2 轉軸 + 外殼',
+            '+ 延長桿2 + 馬達3 轉軸 + 外殼',
+            '+ 短轉接頭 + 馬達4 轉軸 + 外殼',
+            '+ 短轉接頭 + 馬達5 轉軸 + 外殼',
+            '+ 延長桿 + 夾爪',
+        ];
+
+        function updateLayerLabel() {
+            debugLayerLabel.innerText = DEBUG_MAX_LAYER === 0 ? '0 (只有底座)' : `第 ${DEBUG_MAX_LAYER} 層`;
+            debugLayerDesc.innerText = LAYER_DESCRIPTIONS[DEBUG_MAX_LAYER] || '';
+        }
+
+        document.getElementById('debugLayerPlus').addEventListener('click', () => {
+            if (DEBUG_MAX_LAYER < 6) DEBUG_MAX_LAYER++;
+            updateLayerLabel();
+            refreshScene();
+        });
+        document.getElementById('debugLayerMinus').addEventListener('click', () => {
+            if (DEBUG_MAX_LAYER > 0) DEBUG_MAX_LAYER--;
+            updateLayerLabel();
+            refreshScene();
+        });
+        updateLayerLabel();
+
+        function makeSlider(container, label, min, max, step, value, onChange) {
+            const wrap = document.createElement('div');
+            wrap.style.marginBottom = '6px';
+            const row = document.createElement('div');
+            row.style.display = 'flex'; row.style.justifyContent = 'space-between';
+            row.innerHTML = `<span>${label}</span><span class="val">${value}</span>`;
+            const input = document.createElement('input');
+            input.type = 'range'; input.min = min; input.max = max; input.step = step; input.value = value;
+            input.style.width = '100%';
+            input.addEventListener('input', () => {
+                row.querySelector('.val').innerText = input.value;
+                onChange(parseFloat(input.value));
+            });
+            wrap.appendChild(row); wrap.appendChild(input);
+            container.appendChild(wrap);
+            // 🌟 讓外部程式(例如IK求解結果)可以直接更新滑桿顯示,不用透過使用者拖曳觸發
+            input.setDisplayValue = (v) => {
+                const clamped = Math.max(min, Math.min(max, v));
+                input.value = clamped;
+                row.querySelector('.val').innerText = clamped.toFixed(1);
+            };
+            return input;
+        }
+
+        function refreshScene() {
+            const topo = latestTopology.length > 0 ? latestTopology : MOCK_TOPOLOGY;
+            rebuildTopology(topo);
+        }
+
+        document.getElementById('debugLoadMock').addEventListener('click', () => {
+            latestTopology = MOCK_TOPOLOGY;
+            rebuildTopology(MOCK_TOPOLOGY);
+        });
+
+        // 🌟 視覺呈現方向修正:數學模型(ikForwardKinematics)裡,馬達2/3/5都是繞Y軸,
+        // 且"正角度"代表同一種物理彎曲方向;但3D網頁的連接件是純視覺校正,
+        // 實際測試發現馬達2跟馬達3套用同樣角度時,畫面呈現的彎曲方向相反。
+        // 這個陣列只影響"3D畫面怎麼顯示",不影響IK算出的角度數字本身(那組數字才是要給實體硬體的)
+        // ⚠️ 馬達5的方向還待確認,目前先假設跟馬達3同向,如果測試後發現不對請回報
+        const VISUAL_SIGN = [1, -1, 1, 1, 1]; // 對應馬達1~5
+
+        // 度數 <-> servo position(0~1000) 互轉,對應這個系統既定的換算公式
+        function degToServoPos(deg) { return deg / 0.24 + 500; }
+        function servoPosToDeg(pos) { return (pos - 500) * 0.24; }
+
+        // 🌟 手動關節角度測試:直接設定serverAngles,繞過IK,方便驗證單一關節實際轉動方向
+        // (已套用VISUAL_SIGN修正,所以現在每條滑桿的正值,應該都對應同一種"往前彎"的視覺方向)
+        const manualJointContainer = document.getElementById('manualJointSliders');
+        const manualJointInputs = []; // 存起來,方便IK求解完同步更新這幾條滑桿的顯示
+        for (let id = 1; id <= 5; id++) {
+            const inp = makeSlider(manualJointContainer, `馬達${id} (度)`, -120, 120, 1, 0, deg => {
+                serverAngles[id] = degToServoPos(deg * VISUAL_SIGN[id-1]);
+                lastIkThetas[id-1] = deg; // 🌟 手動調整也算數,讓下次IK求解從這裡熱啟動
+            });
+            manualJointInputs.push(inp);
+        }
+
+        // ======================================================
+        // 🌟 逆向運動學(IK)數學模型 —— 與先前MATLAB/Python驗證過的邏輯完全一致
+        // 這裡完全獨立於3D視覺場景的連接件校正,是純數學的關節角度求解
+        // ⚠️ 提醒:算出的角度假設關節軸向為 Z,Y,Y,Z,Y,套用到這個3D模型前,
+        // 建議先用上面的「手動關節角度測試」逐一確認實際轉動方向是否吻合
+        // ======================================================
+        function ikDeg2rad(d) { return (d * Math.PI) / 180; }
+        function ikIdentity() { return [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]; }
+        function ikMultiply(a, b) {
+            const r = new Array(16).fill(0);
+            for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+                let s = 0;
+                for (let k = 0; k < 4; k++) s += a[i*4+k] * b[k*4+j];
+                r[i*4+j] = s;
+            }
+            return r;
+        }
+        function ikRotZ(deg) {
+            const t = ikDeg2rad(deg), c = Math.cos(t), s = Math.sin(t);
+            return [c,-s,0,0, s,c,0,0, 0,0,1,0, 0,0,0,1];
+        }
+        function ikRotY(deg) {
+            const t = ikDeg2rad(deg), c = Math.cos(t), s = Math.sin(t);
+            return [c,0,s,0, 0,1,0,0, -s,0,c,0, 0,0,0,1];
+        }
+        function ikTrans(dx, dy, dz) {
+            return [1,0,0,dx, 0,1,0,dy, 0,0,1,dz, 0,0,0,1];
+        }
+        function ikGetPos(T) { return [T[3], T[7], T[11]]; }
+        function ikGetDir(T) { return [T[2], T[6], T[10]]; }
+
+        function ikForwardKinematics(t1, t2, t3, t4, t5) {
+            let T = ikIdentity();
+            T = ikMultiply(ikMultiply(T, ikRotZ(t1)), ikTrans(0, 0, 48));
+            T = ikMultiply(ikMultiply(T, ikRotY(t2)), ikTrans(116, 0, 0));
+            T = ikMultiply(ikMultiply(T, ikTrans(0, 0, 125)), ikTrans(-116, 0, 0));
+            T = ikMultiply(ikMultiply(T, ikRotY(t3)), ikTrans(0, 0, 116));
+            T = ikMultiply(T, ikRotZ(t4));
+            T = ikMultiply(ikMultiply(T, ikRotY(t5)), ikTrans(-116, 0, 0));
+            T = ikMultiply(ikMultiply(ikMultiply(T, ikTrans(0,0,92)), ikTrans(116,0,0)), ikTrans(0,0,54.3));
+            T = ikMultiply(T, ikTrans(0, 0, 91.9));
+            return { pos: ikGetPos(T), dir: ikGetDir(T) };
+        }
+
+        const IK_JOINT_LIMITS = [[-120,120],[-120,120],[-120,120],[-120,120],[-120,120]];
+        const IK_ORIENT_WEIGHT = 120;
+
+        function ikComputeOutputVec(thetas, posOnly) {
+            const { pos, dir } = ikForwardKinematics(...thetas);
+            if (posOnly) return [pos[0], pos[1], pos[2]];
+            const dl = Math.hypot(dir[0], dir[1], dir[2]) || 1;
+            return [pos[0], pos[1], pos[2], (dir[0]/dl)*IK_ORIENT_WEIGHT, (dir[1]/dl)*IK_ORIENT_WEIGHT, (dir[2]/dl)*IK_ORIENT_WEIGHT];
+        }
+
+        function ikSolveLinear(A, b) {
+            const n = b.length;
+            const M = A.map(row => [...row]);
+            const rhs = [...b];
+            for (let i = 0; i < n; i++) {
+                let maxRow = i;
+                for (let k = i+1; k < n; k++) if (Math.abs(M[k][i]) > Math.abs(M[maxRow][i])) maxRow = k;
+                [M[i], M[maxRow]] = [M[maxRow], M[i]];
+                [rhs[i], rhs[maxRow]] = [rhs[maxRow], rhs[i]];
+                const piv = M[i][i] || 1e-9;
+                for (let k = i+1; k < n; k++) {
+                    const f = M[k][i] / piv;
+                    for (let j = i; j < n; j++) M[k][j] -= f * M[i][j];
+                    rhs[k] -= f * rhs[i];
+                }
+            }
+            const sol = Array(n).fill(0);
+            for (let i = n-1; i >= 0; i--) {
+                let s = rhs[i];
+                for (let j = i+1; j < n; j++) s -= M[i][j] * sol[j];
+                sol[i] = s / (M[i][i] || 1e-9);
+            }
+            return sol;
+        }
+
+        // 🌟 記錄"目前姿態"(真實角度,非視覺修正過的),供下一次求解優先熱啟動使用
+        let lastIkThetas = [0, 0, 0, 0, 0];
+
+        function ikRunSingleAttempt(init, targetVec, h, posOnly) {
+            const outDim = targetVec.length; // 🌟 3(僅位置) 或 6(位置+方向),動態決定
+            let thetas = [...init];
+            let lambda = 5, errNorm = Infinity, iters = 0, converged = false;
+
+            for (let iter = 0; iter < 300; iter++) {
+                iters = iter + 1;
+                const out = ikComputeOutputVec(thetas, posOnly);
+                const err = targetVec.map((v,i) => v - out[i]);
+                errNorm = Math.hypot(...err);
+                if (errNorm < 0.1) { converged = true; break; }
+
+                const cols = [];
+                for (let j = 0; j < 5; j++) {
+                    const t2 = [...thetas]; t2[j] += h;
+                    const out2 = ikComputeOutputVec(t2, posOnly);
+                    cols.push(out2.map((v,i) => (v - out[i]) / h));
+                }
+                const JTJ = Array.from({length:5}, () => Array(5).fill(0));
+                const JTe = Array(5).fill(0);
+                for (let a = 0; a < 5; a++) {
+                    for (let b = 0; b < 5; b++) {
+                        let s = 0;
+                        for (let r = 0; r < outDim; r++) s += cols[a][r] * cols[b][r];
+                        JTJ[a][b] = s;
+                    }
+                    let se = 0;
+                    for (let r = 0; r < outDim; r++) se += cols[a][r] * err[r];
+                    JTe[a] = se;
+                }
+                for (let a = 0; a < 5; a++) JTJ[a][a] += lambda*lambda;
+                const dtheta = ikSolveLinear(JTJ, JTe);
+                const newThetas = thetas.map((t,i) => Math.max(IK_JOINT_LIMITS[i][0], Math.min(IK_JOINT_LIMITS[i][1], t + dtheta[i])));
+                const newOut = ikComputeOutputVec(newThetas, posOnly);
+                const newErrNorm = Math.hypot(...targetVec.map((v,i) => v - newOut[i]));
+                if (newErrNorm < errNorm) { thetas = newThetas; lambda = Math.max(lambda*0.7, 0.01); }
+                else { lambda *= 2.5; if (lambda > 1e6) break; }
+            }
+
+            const feasible = converged || errNorm < 2.0;
+            return { thetas, converged, feasible, errNorm, iters };
+        }
+
+        // 🌟 targetDir 可以是 null:此時只用位置(3個限制條件)求解,不管方向,
+        // 對5顆馬達來說限制條件變少,更容易找到解,適合"只想到達某個位置,不在乎朝向"的情況
+        function ikSolve(targetPos, targetDir) {
+            const posOnly = !targetDir;
+            let targetVec;
+            if (posOnly) {
+                targetVec = [targetPos[0], targetPos[1], targetPos[2]];
+            } else {
+                const dl = Math.hypot(targetDir[0], targetDir[1], targetDir[2]) || 1;
+                targetVec = [targetPos[0], targetPos[1], targetPos[2],
+                    (targetDir[0]/dl)*IK_ORIENT_WEIGHT, (targetDir[1]/dl)*IK_ORIENT_WEIGHT, (targetDir[2]/dl)*IK_ORIENT_WEIGHT];
+            }
+            const h = 0.05;
+
+            // 🌟 熱啟動:優先嘗試"從目前姿態出發",維持連續運動的連貫性
+            const warmResult = ikRunSingleAttempt(lastIkThetas, targetVec, h, posOnly);
+            if (warmResult.feasible) {
+                warmResult.warmStarted = true;
+                return warmResult;
+            }
+
+            // 熱啟動找不到可行解(例如目標離目前姿態太遠),才退回多起點策略
+            const restarts = [
+                [0,0,0,0,0], [30,-30,30,0,-30], [-30,40,-40,20,30], [10,-60,60,-10,-20], [0,60,-60,0,40],
+            ];
+            let best = null;
+
+            for (const init of restarts) {
+                const candidate = ikRunSingleAttempt(init, targetVec, h, posOnly);
+                if (!best || (candidate.feasible && !best.feasible) || (candidate.feasible === best.feasible && candidate.errNorm < best.errNorm)) {
+                    best = candidate;
+                }
+            }
+            return best;
+        }
+
+        // 🌟 IK方向輸入滑桿(yaw/pitch,對應目標指向角度)
+        const ikDir = { yaw: 0, pitch: 90 };
+        const ikDirContainer = document.getElementById('ikDirSliders');
+        makeSlider(ikDirContainer, '水平角 Yaw (度)', -180, 180, 1, ikDir.yaw, v => ikDir.yaw = v);
+        makeSlider(ikDirContainer, '俯仰角 Pitch (度)', -90, 90, 1, ikDir.pitch, v => ikDir.pitch = v);
+
+        // 🌟 求解模式切換:僅位置(不管方向) / 位置+方向(兩者都要滿足)
+        let ikPosOnlyMode = true;
+        const modePosOnlyBtn = document.getElementById('modePosOnly');
+        const modePosDirBtn = document.getElementById('modePosDir');
+        const ikDirWrapper = document.getElementById('ikDirWrapper');
+
+        function setIkMode(posOnly) {
+            ikPosOnlyMode = posOnly;
+            modePosOnlyBtn.style.background = posOnly ? '#f9e2af' : '#313244';
+            modePosOnlyBtn.style.color = posOnly ? '#111' : '#a6adc8';
+            modePosOnlyBtn.style.fontWeight = posOnly ? 'bold' : 'normal';
+            modePosDirBtn.style.background = posOnly ? '#313244' : '#f9e2af';
+            modePosDirBtn.style.color = posOnly ? '#a6adc8' : '#111';
+            modePosDirBtn.style.fontWeight = posOnly ? 'normal' : 'bold';
+            ikDirWrapper.style.display = posOnly ? 'none' : 'block';
+        }
+        modePosOnlyBtn.addEventListener('click', () => setIkMode(true));
+        modePosDirBtn.addEventListener('click', () => setIkMode(false));
+        setIkMode(true); // 🌟 預設用"僅位置"模式,比較不容易求解失敗
+
+        document.getElementById('ikSolveBtn').addEventListener('click', () => {
+            if (latestTopology.length === 0) { latestTopology = MOCK_TOPOLOGY; rebuildTopology(MOCK_TOPOLOGY); }
+
+            const x = parseFloat(document.getElementById('ikX').value);
+            const y = parseFloat(document.getElementById('ikY').value);
+            const z = parseFloat(document.getElementById('ikZ').value);
+
+            let dir = null; // 🌟 僅位置模式時,dir維持null,ikSolve內部會自動切換成3維(只看位置)求解
+            if (!ikPosOnlyMode) {
+                const yawR = ikDeg2rad(ikDir.yaw), pitchR = ikDeg2rad(ikDir.pitch);
+                dir = [Math.cos(pitchR)*Math.cos(yawR), Math.cos(pitchR)*Math.sin(yawR), Math.sin(pitchR)];
+            }
+
+            const result = ikSolve([x, y, z], dir);
+            const statusEl = document.getElementById('ikStatus');
+
+            if (!result.feasible) {
+                statusEl.innerHTML = `<span style="color:#f38ba8;">⚠ 無法到達此目標</span><br>誤差 ${result.errNorm.toFixed(1)}`;
+                return;
+            }
+
+            for (let i = 0; i < 5; i++) {
+                const visualDeg = result.thetas[i] * VISUAL_SIGN[i];
+                serverAngles[i+1] = degToServoPos(visualDeg);
+                manualJointInputs[i].setDisplayValue(visualDeg); // 🌟 同步更新滑桿顯示
+            }
+            lastIkThetas = [...result.thetas]; // 🌟 記住這次的解,下次求解優先從這裡熱啟動
+            statusEl.innerHTML = `<span style="color:#a6e3a1;">${result.converged ? '已收斂' : '接近解'}</span> 誤差${result.errNorm.toFixed(2)} 迭代${result.iters}次` +
+                `${result.warmStarted ? ' <span style="color:#89b4fa;">(延續前次姿態)</span>' : ' <span style="color:#f9e2af;">(重新搜尋新解)</span>'}` +
+                `${ikPosOnlyMode ? ' <span style="color:#6c7086;">[僅位置模式]</span>' : ''}<br>` +
+                `<span style="color:#6c7086;">(以下是真實角度,給硬體用,3D畫面已自動做方向校正顯示)</span><br>` +
+                result.thetas.map((t,i) => `M${i+1}:${t.toFixed(1)}°`).join(' ');
+        });
+    </script>
+</body>
+</html>
