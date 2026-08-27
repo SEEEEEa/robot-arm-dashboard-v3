@@ -43,6 +43,8 @@
             #ui-header h2 { font-size: 16px; }
             #toggleIcon { font-size: 10px; padding: 2px; }
 
+            #debugPanel { top: auto; bottom: 10px; right: 10px; left: 10px; width: auto; max-height: 60vh; }
+
             #mobileControlOverlay {
                 display: block !important; visibility: hidden; opacity: 0;
                 position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
@@ -118,9 +120,14 @@
     </div>
 
     <!-- 🌟 工具面板:分層顯示 / 手動關節測試 / IK逆向運動學求解 -->
-    <div id="debugPanel" style="position:absolute; top:20px; right:20px; z-index:20; background:rgba(30,30,46,0.92); color:#cdd6f4; padding:16px; border-radius:12px; width:280px; font-size:13px; max-height:92vh; overflow-y:auto; box-shadow:0 4px 15px rgba(0,0,0,0.5);">
-        <div style="font-weight:bold; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
-            🔧 模擬工具
+    <div id="debugPanel" style="position:absolute; top:20px; right:20px; z-index:20; background:rgba(30,30,46,0.92); color:#cdd6f4; padding:16px; border-radius:12px; width:280px; font-size:13px; max-height:92vh; overflow-y:auto; box-shadow:0 4px 15px rgba(0,0,0,0.5); box-sizing:border-box;">
+        <div id="debugPanelHeader" style="font-weight:bold; display:flex; justify-content:space-between; align-items:center; cursor:pointer;">
+            <span>🔧 模擬工具</span>
+            <span id="debugToggleIcon" style="font-size:12px; color:#a6adc8;">▼ 展開</span>
+        </div>
+
+        <div id="debugPanelContent">
+        <div style="margin-top:10px; margin-bottom:10px; display:flex; justify-content:flex-end;">
             <button id="debugLoadMock" style="font-size:11px; background:#89b4fa; color:#111; border:none; border-radius:6px; padding:4px 8px; cursor:pointer;">載入測試拓樸</button>
         </div>
 
@@ -158,6 +165,7 @@
         </div>
         <button id="ikSolveBtn" style="width:100%; margin-top:8px; background:#f9e2af; color:#111; border:none; border-radius:6px; padding:8px; cursor:pointer; font-weight:bold;">求解並套用</button>
         <div id="ikStatus" style="margin-top:8px; font-size:12px; color:#a6adc8;"></div>
+        </div>
     </div>
 
     <div id="canvas-container"></div>
@@ -177,6 +185,19 @@
             else { uiContent.style.display = 'block'; toggleIcon.innerHTML = '▲ 點擊折疊面板 ▲'; }
         }
         updateUIState();
+
+        // 🌟 右側「模擬工具」面板也比照左側,手機螢幕預設收起,避免擋住3D模型
+        const debugPanelContent = document.getElementById('debugPanelContent');
+        const debugToggleIcon = document.getElementById('debugToggleIcon');
+        let isDebugCollapsed = window.innerWidth <= 768;
+
+        function toggleDebugPanel() { isDebugCollapsed = !isDebugCollapsed; updateDebugPanelState(); }
+        function updateDebugPanelState() {
+            if (isDebugCollapsed) { debugPanelContent.style.display = 'none'; debugToggleIcon.innerHTML = '▶ 展開'; }
+            else { debugPanelContent.style.display = 'block'; debugToggleIcon.innerHTML = '▼ 收起'; }
+        }
+        document.getElementById('debugPanelHeader').addEventListener('click', toggleDebugPanel);
+        updateDebugPanelState();
 
         const scene = new THREE.Scene();
         scene.add(new THREE.GridHelper(200, 50, 0x89b4fa, 0x313244));
