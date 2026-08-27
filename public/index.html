@@ -175,29 +175,52 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
 
     <script>
+        const uiLayer = document.getElementById('ui-layer');
         const uiContent = document.getElementById('ui-content');
         const toggleIcon = document.getElementById('toggleIcon');
         let isUICollapsed = window.innerWidth <= 768; 
 
         function toggleUI() { isUICollapsed = !isUICollapsed; updateUIState(); }
         function updateUIState() {
-            if (isUICollapsed) { uiContent.style.display = 'none'; toggleIcon.innerHTML = '▼ 點擊展開面板 ▼'; }
-            else { uiContent.style.display = 'block'; toggleIcon.innerHTML = '▲ 點擊折疊面板 ▲'; }
+            if (isUICollapsed) {
+                uiContent.style.display = 'none';
+                toggleIcon.innerHTML = '▼ 點擊展開面板 ▼';
+                // 🌟 直接強制縮小外層容器本身,不依賴CSS層疊規則(避免inline style/media query優先權衝突)
+                uiLayer.style.maxHeight = 'none';
+                uiLayer.style.padding = '10px 16px';
+            } else {
+                uiContent.style.display = 'block';
+                toggleIcon.innerHTML = '▲ 點擊折疊面板 ▲';
+                uiLayer.style.maxHeight = window.innerWidth <= 768 ? '30vh' : '90vh';
+                uiLayer.style.padding = '20px';
+            }
         }
         updateUIState();
 
         // 🌟 右側「模擬工具」面板也比照左側,手機螢幕預設收起,避免擋住3D模型
+        const debugPanel = document.getElementById('debugPanel');
         const debugPanelContent = document.getElementById('debugPanelContent');
         const debugToggleIcon = document.getElementById('debugToggleIcon');
         let isDebugCollapsed = window.innerWidth <= 768;
 
         function toggleDebugPanel() { isDebugCollapsed = !isDebugCollapsed; updateDebugPanelState(); }
         function updateDebugPanelState() {
-            if (isDebugCollapsed) { debugPanelContent.style.display = 'none'; debugToggleIcon.innerHTML = '▶ 展開'; }
-            else { debugPanelContent.style.display = 'block'; debugToggleIcon.innerHTML = '▼ 收起'; }
+            if (isDebugCollapsed) {
+                debugPanelContent.style.display = 'none';
+                debugToggleIcon.innerHTML = '▶ 展開';
+                // 🌟 同樣直接強制縮小,不依賴CSS層疊規則
+                debugPanel.style.maxHeight = 'none';
+                debugPanel.style.padding = '10px 16px';
+            } else {
+                debugPanelContent.style.display = 'block';
+                debugToggleIcon.innerHTML = '▼ 收起';
+                debugPanel.style.maxHeight = '92vh';
+                debugPanel.style.padding = '16px';
+            }
         }
         document.getElementById('debugPanelHeader').addEventListener('click', toggleDebugPanel);
         updateDebugPanelState();
+
 
         const scene = new THREE.Scene();
         scene.add(new THREE.GridHelper(200, 50, 0x89b4fa, 0x313244));
