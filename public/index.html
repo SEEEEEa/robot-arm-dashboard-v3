@@ -9,14 +9,15 @@
         
         #ui-layer { 
             position: absolute; top: 20px; left: 20px; color: #cdd6f4; pointer-events: none; z-index: 10; 
-            background: rgba(49, 50, 68, 0.85); padding: 20px; border-radius: 15px; 
-            box-shadow: 0 4px 15px rgba(0,0,0,0.5); min-width: 220px;
-            backdrop-filter: blur(4px);
+            min-width: 220px; max-width: 90vw;
             display: flex; flex-direction: column;
-            max-height: 90vh; 
         }
         
-        #ui-header { pointer-events: auto; cursor: pointer; user-select: none; text-align: center; padding-bottom: 5px; }
+        #ui-header { 
+            pointer-events: auto; cursor: pointer; user-select: none; text-align: center; 
+            background: rgba(49, 50, 68, 0.85); padding: 12px 20px; border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5); backdrop-filter: blur(4px);
+        }
         #ui-header h2 { margin: 0; text-align: left; }
         #toggleIcon { 
             font-size: 12px; color: #a6adc8; margin-top: 8px; font-weight: bold; 
@@ -24,7 +25,12 @@
         }
         #toggleIcon:hover { background: rgba(255,255,255,0.2); color: #cdd6f4; }
 
-        #ui-content { pointer-events: none; overflow-y: auto; padding-right: 5px; transition: max-height 0.3s ease, opacity 0.3s ease; }
+        #ui-content { 
+            pointer-events: none; overflow-y: auto; padding: 12px 20px 20px; 
+            background: rgba(49, 50, 68, 0.85); border-radius: 15px; margin-top: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5); backdrop-filter: blur(4px);
+            max-height: 80vh;
+        }
         #ui-content::-webkit-scrollbar { width: 6px; }
         #ui-content::-webkit-scrollbar-thumb { background: #585b70; border-radius: 3px; }
 
@@ -38,12 +44,13 @@
         #btnArm, #baseRotationSelect { pointer-events: auto; }
 
         @media (max-width: 768px) {
-            #ui-layer { left: 10px; top: 10px; right: 10px; padding: 10px; min-width: unset; max-height: 30vh; }
+            #ui-layer { left: 10px; top: 10px; right: 10px; min-width: unset; }
+            #ui-content { max-height: 30vh; }
             #btnArm, #baseSettings, .hint, #selectionPanel, #angleListContainer { display: none !important; }
             #ui-header h2 { font-size: 16px; }
             #toggleIcon { font-size: 10px; padding: 2px; }
 
-            #debugPanel { top: auto; bottom: 10px; right: 10px; left: 10px; width: auto; max-height: 60vh; }
+            #debugPanel { top: auto; bottom: 10px; right: 10px; left: 10px; width: auto; }
 
             #mobileControlOverlay {
                 display: block !important; visibility: hidden; opacity: 0;
@@ -120,13 +127,13 @@
     </div>
 
     <!-- 🌟 工具面板:分層顯示 / 手動關節測試 / IK逆向運動學求解 -->
-    <div id="debugPanel" style="position:absolute; top:20px; right:20px; z-index:20; background:rgba(30,30,46,0.92); color:#cdd6f4; padding:16px; border-radius:12px; width:280px; font-size:13px; max-height:92vh; overflow-y:auto; box-shadow:0 4px 15px rgba(0,0,0,0.5); box-sizing:border-box;">
-        <div id="debugPanelHeader" style="font-weight:bold; display:flex; justify-content:space-between; align-items:center; cursor:pointer;">
+    <div id="debugPanel" style="position:absolute; top:20px; right:20px; z-index:20; color:#cdd6f4; width:280px; max-width:90vw; font-size:13px; box-sizing:border-box;">
+        <div id="debugPanelHeader" style="font-weight:bold; display:flex; justify-content:space-between; align-items:center; cursor:pointer; background:rgba(30,30,46,0.92); padding:12px 16px; border-radius:12px; box-shadow:0 4px 15px rgba(0,0,0,0.5);">
             <span>🔧 模擬工具</span>
             <span id="debugToggleIcon" style="font-size:12px; color:#a6adc8;">▼ 展開</span>
         </div>
 
-        <div id="debugPanelContent">
+        <div id="debugPanelContent" style="background:rgba(30,30,46,0.92); padding:16px; border-radius:12px; margin-top:8px; max-height:80vh; overflow-y:auto; box-shadow:0 4px 15px rgba(0,0,0,0.5); box-sizing:border-box;">
         <div style="margin-top:10px; margin-bottom:10px; display:flex; justify-content:flex-end;">
             <button id="debugLoadMock" style="font-size:11px; background:#89b4fa; color:#111; border:none; border-radius:6px; padding:4px 8px; cursor:pointer;">載入測試拓樸</button>
         </div>
@@ -175,51 +182,30 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
 
     <script>
-        const uiLayer = document.getElementById('ui-layer');
         const uiContent = document.getElementById('ui-content');
         const toggleIcon = document.getElementById('toggleIcon');
         let isUICollapsed = window.innerWidth <= 768; 
 
         function toggleUI() { isUICollapsed = !isUICollapsed; updateUIState(); }
         function updateUIState() {
-            if (isUICollapsed) {
-                uiContent.style.display = 'none';
-                toggleIcon.innerHTML = '▼ 點擊展開面板 ▼';
-                // 🌟 直接強制縮小外層容器本身,不依賴CSS層疊規則(避免inline style/media query優先權衝突)
-                uiLayer.style.maxHeight = 'none';
-                uiLayer.style.padding = '10px 16px';
-            } else {
-                uiContent.style.display = 'block';
-                toggleIcon.innerHTML = '▲ 點擊折疊面板 ▲';
-                uiLayer.style.maxHeight = window.innerWidth <= 768 ? '30vh' : '90vh';
-                uiLayer.style.padding = '20px';
-            }
+            if (isUICollapsed) { uiContent.style.display = 'none'; toggleIcon.innerHTML = '▼ 點擊展開面板 ▼'; }
+            else { uiContent.style.display = 'block'; toggleIcon.innerHTML = '▲ 點擊折疊面板 ▲'; }
         }
         updateUIState();
 
         // 🌟 右側「模擬工具」面板也比照左側,手機螢幕預設收起,避免擋住3D模型
-        const debugPanel = document.getElementById('debugPanel');
         const debugPanelContent = document.getElementById('debugPanelContent');
         const debugToggleIcon = document.getElementById('debugToggleIcon');
         let isDebugCollapsed = window.innerWidth <= 768;
 
         function toggleDebugPanel() { isDebugCollapsed = !isDebugCollapsed; updateDebugPanelState(); }
         function updateDebugPanelState() {
-            if (isDebugCollapsed) {
-                debugPanelContent.style.display = 'none';
-                debugToggleIcon.innerHTML = '▶ 展開';
-                // 🌟 同樣直接強制縮小,不依賴CSS層疊規則
-                debugPanel.style.maxHeight = 'none';
-                debugPanel.style.padding = '10px 16px';
-            } else {
-                debugPanelContent.style.display = 'block';
-                debugToggleIcon.innerHTML = '▼ 收起';
-                debugPanel.style.maxHeight = '92vh';
-                debugPanel.style.padding = '16px';
-            }
+            if (isDebugCollapsed) { debugPanelContent.style.display = 'none'; debugToggleIcon.innerHTML = '▶ 展開'; }
+            else { debugPanelContent.style.display = 'block'; debugToggleIcon.innerHTML = '▼ 收起'; }
         }
         document.getElementById('debugPanelHeader').addEventListener('click', toggleDebugPanel);
         updateDebugPanelState();
+
 
 
         const scene = new THREE.Scene();
