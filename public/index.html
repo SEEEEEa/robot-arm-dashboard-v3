@@ -121,6 +121,11 @@
         </div>
     </div>
 
+    <!-- 🌟 碰撞警示徽章:固定在畫面上方中央,偵測到自我碰撞時才顯示 -->
+    <div id="collisionBadge" style="display:none; position:absolute; top:20px; left:50%; transform:translateX(-50%); z-index:30; background:#f38ba8; color:#111; padding:10px 20px; border-radius:20px; font-weight:bold; box-shadow:0 4px 15px rgba(0,0,0,0.5); pointer-events:none;">
+        ⚠️ 偵測到機構自我碰撞
+    </div>
+
     <div id="mobileControlOverlay">
         <span class="slider-label" id="mLabel">請點擊 3D 關節進行控制</span>
         <input type="range" id="mobileSlider" min="0" max="1000" value="500">
@@ -439,12 +444,17 @@
             }
         }
 
+        // 🌟 碰撞檢測用:記錄每個零件+它在鏈路上的順序編號
+        // 編號規則: 底座=0, 模組id的轉軸=1+(id-1)*3, 外殼=2+(id-1)*3, 後方連接件=3+(id-1)*3, 夾爪=16
+        let collisionMeshes = [];
+
         function rebuildTopology(topo) {
             if (!pivotStlGeometry || !bodyStlGeometry || !baseMesh) return;
             // 🌟 分層校正:只保留 id <= DEBUG_MAX_LAYER 的節點,其餘節點暫時不顯示
             topo = topo.filter(n => n.id <= DEBUG_MAX_LAYER);
             while(modulesGroup.children.length > 0) modulesGroup.remove(modulesGroup.children[0]);
             modules = {};
+            collisionMeshes = [{ mesh: baseMesh, order: 0 }];
             topo.forEach(node => {
                 const group = new THREE.Group(); const rotator = new THREE.Group(); group.add(rotator);
                 // 🌟 修正:pivot是每個模組本身固有的轉軸,永遠都是pivotStlGeometry,不會被連接件取代
@@ -453,6 +463,8 @@
                 rotator.add(bMesh); group.add(pMesh); addBlackEdges(pMesh); addBlackEdges(bMesh);
                 group.userData = { id: node.id, rotator: rotator }; pMesh.userData = { id: node.id, type: 'pivot' }; bMesh.userData = { id: node.id, type: 'body' };
                 modules[node.id] = group;
+                collisionMeshes.push({ mesh: pMesh, order: 1 + (node.id-1)*3 });
+                collisionMeshes.push({ mesh: bMesh, order: 2 + (node.id-1)*3 });
             });
             topo.forEach(node => {
                 if (node.id === 1) modulesGroup.add(modules[1]);
@@ -489,6 +501,7 @@
                             THREE.MathUtils.degToRad(cfg.rot[2])
                         );
                         modules[node.id].userData.rotator.add(cMesh);
+                        collisionMeshes.push({ mesh: cMesh, order: 3 + (node.id-1)*3 });
                     }
 
                     modules[node.id].userData.rotator.add(child);
@@ -509,6 +522,7 @@
                     THREE.MathUtils.degToRad(rodCfg.rot[2])
                 );
                 modules[5].userData.rotator.add(rMesh);
+                collisionMeshes.push({ mesh: rMesh, order: 15 });
 
                 const gMesh = new THREE.Mesh(gripperGeometry, new THREE.MeshPhongMaterial({ color: 0x94e2d5 }));
                 addBlackEdges(gMesh);
@@ -520,6 +534,7 @@
                     THREE.MathUtils.degToRad(rodCfg.childRot[2])
                 );
                 modules[5].userData.rotator.add(gMesh);
+                collisionMeshes.push({ mesh: gMesh, order: 16 });
             }
             
             let maxAxisLen = 100;
@@ -654,7 +669,26 @@
             }
         });
 
+        // 🌟 自我碰撞檢測:用軸對齊邊界框(AABB)比對每兩個零件,跳過"相鄰、預期接觸"的零件對
+        // orderDiff <= 1 代表相鄰(例如同一模組的轉軸跟外殼、或外殼跟緊接著的連接件),這種本來就該接觸,不算碰撞
+        function checkSelfCollision() {
+            const boxes = collisionMeshes.map(item => ({
+                box: new THREE.Box3().setFromObject(item.mesh),
+                order: item.order
+            }));
+            for (let i = 0; i < boxes.length; i++) {
+                for (let j = i + 1; j < boxes.length; j++) {
+                    if (Math.abs(boxes[i].order - boxes[j].order) <= 1) continue; // 跳過相鄰零件
+                    if (boxes[i].box.intersectsBox(boxes[j].box)) {
+                        return true; // 偵測到非預期的重疊 = 碰撞
+                    }
+                }
+            }
+            return false;
+        }
+
         let worldVec = new THREE.Vector3();
+        let collisionCheckFrameCounter = 0;
         function animate() {
             requestAnimationFrame(animate); controls.update();
             for (let id in serverAngles) if (modules[id]) {
@@ -670,6 +704,17 @@
             } else {
                 document.getElementById('xyzDisplay').innerHTML = `X: 0.0 <br>Y: 0.0 <br>Z: 0.0`;
             }
+
+            // 🌟 每10幀檢查一次碰撞(約6次/秒),避免每幀都算造成效能負擔
+            collisionCheckFrameCounter++;
+            if (collisionCheckFrameCounter % 10 === 0 && collisionMeshes.length > 0) {
+                const collided = checkSelfCollision();
+                const badge = document.getElementById('collisionBadge');
+                if (badge) {
+                    badge.style.display = collided ? 'block' : 'none';
+                }
+            }
+
             renderer.render(scene, camera);
         }
         animate();
