@@ -139,8 +139,15 @@
         </div>
 
         <div id="debugPanelContent" style="background:rgba(30,30,46,0.92); padding:16px; border-radius:12px; margin-top:8px; max-height:80vh; overflow-y:auto; box-shadow:0 4px 15px rgba(0,0,0,0.5); box-sizing:border-box;">
-        <div style="margin-top:10px; margin-bottom:10px; display:flex; justify-content:flex-end;">
+        <div style="margin-top:10px; margin-bottom:10px; display:flex; justify-content:flex-end; gap:6px;">
             <button id="debugLoadMock" style="font-size:11px; background:#89b4fa; color:#111; border:none; border-radius:6px; padding:4px 8px; cursor:pointer;">載入測試拓樸</button>
+        </div>
+
+        <div style="border:1px solid #45475a; border-radius:8px; padding:10px; margin-bottom:14px;">
+            <div style="font-weight:bold; color:#f38ba8; margin-bottom:4px;">⚠️ 碰撞偵測校正</div>
+            <div style="color:#a6adc8; font-size:11px; margin-bottom:8px;">先把手臂擺在確定安全、沒有碰撞的姿態(例如剛開啟頁面的預設站立姿態),再按下方按鈕校正基準。校正後,系統只會警示"超出這個基準的新重疊"。</div>
+            <button id="calibrateCollisionBtn" style="width:100%; background:#f38ba8; color:#111; border:none; border-radius:6px; padding:6px; cursor:pointer; font-weight:bold; font-size:12px;">在目前姿態校正碰撞基準</button>
+            <div id="calibrateStatus" style="color:#6c7086; font-size:11px; margin-top:6px;">尚未校正</div>
         </div>
 
         <label style="display:block; margin-bottom:4px; color:#a6adc8;">顯示到第幾層</label>
@@ -669,20 +676,43 @@
             }
         });
 
-        // 🌟 自我碰撞檢測:用軸對齊邊界框(AABB)比對每兩個零件,跳過"相鄰、預期接觸"的零件對
-        // orderDiff <= 1 代表相鄰(例如同一模組的轉軸跟外殼、或外殼跟緊接著的連接件),這種本來就該接觸,不算碰撞
-        function checkSelfCollision() {
+        // 🌟 自我碰撞檢測(基準校正法):
+        // AABB包覆框天生比實際零件"胖",單純用鏈路距離判斷相鄰,範圍常常不夠寬,會有大量誤判。
+        // 改用校正機制:先在確定安全的姿態下,把當下所有重疊的配對記錄成"白名單"(視為正常接觸),
+        // 之後只有出現"白名單以外的新重疊"才判定為真正的碰撞。
+        let baselineOverlapPairs = new Set();
+        let hasCalibrated = false;
+
+        function computeAllOverlapPairs() {
             const boxes = collisionMeshes.map(item => ({
                 box: new THREE.Box3().setFromObject(item.mesh),
                 order: item.order
             }));
+            const overlaps = new Set();
             for (let i = 0; i < boxes.length; i++) {
                 for (let j = i + 1; j < boxes.length; j++) {
-                    if (Math.abs(boxes[i].order - boxes[j].order) <= 1) continue; // 跳過相鄰零件
                     if (boxes[i].box.intersectsBox(boxes[j].box)) {
-                        return true; // 偵測到非預期的重疊 = 碰撞
+                        const a = Math.min(boxes[i].order, boxes[j].order);
+                        const b = Math.max(boxes[i].order, boxes[j].order);
+                        overlaps.add(a + '-' + b);
                     }
                 }
+            }
+            return overlaps;
+        }
+
+        // 🌟 在目前姿態下校正基準(手臂要先擺在確定沒有碰撞的姿態,例如剛開啟頁面的預設站立姿態)
+        function calibrateCollisionBaseline() {
+            if (collisionMeshes.length === 0) return;
+            baselineOverlapPairs = computeAllOverlapPairs();
+            hasCalibrated = true;
+        }
+
+        function checkSelfCollision() {
+            if (!hasCalibrated || collisionMeshes.length === 0) return false;
+            const current = computeAllOverlapPairs();
+            for (const key of current) {
+                if (!baselineOverlapPairs.has(key)) return true; // 出現基準以外的新重疊 = 真正的碰撞
             }
             return false;
         }
@@ -785,6 +815,17 @@
         document.getElementById('debugLoadMock').addEventListener('click', () => {
             latestTopology = MOCK_TOPOLOGY;
             rebuildTopology(MOCK_TOPOLOGY);
+            // 🌟 載入測試拓樸後,稍微延遲讓場景穩定,自動校正一次基準(此時角度都是預設值,是安全姿態)
+            setTimeout(() => {
+                calibrateCollisionBaseline();
+                document.getElementById('calibrateStatus').innerText = `已於 ${new Date().toLocaleTimeString()} 自動校正`;
+            }, 300);
+        });
+
+        document.getElementById('calibrateCollisionBtn').addEventListener('click', () => {
+            calibrateCollisionBaseline();
+            document.getElementById('calibrateStatus').innerText = `已於 ${new Date().toLocaleTimeString()} 手動校正(共${baselineOverlapPairs.size}組預期接觸)`;
+            document.getElementById('collisionBadge').style.display = 'none'; // 校正當下先隱藏警示,避免殘留舊狀態
         });
 
         // 🌟 視覺呈現方向修正:數學模型(ikForwardKinematics)裡,馬達2/3/5都是繞Y軸,
