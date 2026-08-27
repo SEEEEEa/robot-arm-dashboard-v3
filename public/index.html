@@ -707,20 +707,35 @@
         let baselineOverlapPairs = new Set();
         let hasCalibrated = false;
 
-        const COLLISION_SHRINK_MARGIN = 3; // 🌟 包覆框主動內縮的邊界(場景單位,約等於實際6mm),減少"剛好擦邊"的誤判
+        const COLLISION_SHRINK_MARGIN = 3; // 🌟 安全邊界(場景單位,約等於實際6mm),減少"剛好擦邊"的誤判
+
+        // 🌟 取得零件在世界座標系裡的包覆球體(不是矩形!)
+        // 球體的優點:不管零件怎麼旋轉,球體大小都不會變(矩形則會因為斜放而膨脹變大),
+        // 這是造成之前"零件一轉動就誤判"的根本原因
+        function getWorldSphere(mesh) {
+            if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
+            const local = mesh.geometry.boundingSphere;
+            const worldCenter = local.center.clone();
+            mesh.localToWorld(worldCenter);
+            const scale = new THREE.Vector3();
+            mesh.matrixWorld.decompose(new THREE.Vector3(), new THREE.Quaternion(), scale);
+            const worldRadius = local.radius * Math.max(scale.x, scale.y, scale.z);
+            return { center: worldCenter, radius: worldRadius };
+        }
 
         function computeAllOverlapPairs() {
-            const boxes = collisionMeshes.map(item => {
-                const box = new THREE.Box3().setFromObject(item.mesh);
-                box.expandByScalar(-COLLISION_SHRINK_MARGIN); // 負值=內縮
-                return { box, order: item.order };
-            });
+            const spheres = collisionMeshes.map(item => ({
+                sphere: getWorldSphere(item.mesh),
+                order: item.order
+            }));
             const overlaps = new Set();
-            for (let i = 0; i < boxes.length; i++) {
-                for (let j = i + 1; j < boxes.length; j++) {
-                    if (boxes[i].box.intersectsBox(boxes[j].box)) {
-                        const a = Math.min(boxes[i].order, boxes[j].order);
-                        const b = Math.max(boxes[i].order, boxes[j].order);
+            for (let i = 0; i < spheres.length; i++) {
+                for (let j = i + 1; j < spheres.length; j++) {
+                    const dist = spheres[i].sphere.center.distanceTo(spheres[j].sphere.center);
+                    const combinedRadius = spheres[i].sphere.radius + spheres[j].sphere.radius - COLLISION_SHRINK_MARGIN;
+                    if (dist < combinedRadius) {
+                        const a = Math.min(spheres[i].order, spheres[j].order);
+                        const b = Math.max(spheres[i].order, spheres[j].order);
                         overlaps.add(a + '-' + b);
                     }
                 }
