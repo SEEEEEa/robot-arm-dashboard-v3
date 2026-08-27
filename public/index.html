@@ -121,11 +121,6 @@
         </div>
     </div>
 
-    <!-- 🌟 碰撞警示徽章:固定在畫面上方中央,偵測到自我碰撞時才顯示 -->
-    <div id="collisionBadge" style="display:none; position:absolute; top:20px; left:50%; transform:translateX(-50%); z-index:30; background:#f38ba8; color:#111; padding:10px 20px; border-radius:20px; font-weight:bold; box-shadow:0 4px 15px rgba(0,0,0,0.5); pointer-events:none;">
-        ⚠️ 偵測到機構自我碰撞
-    </div>
-
     <div id="mobileControlOverlay">
         <span class="slider-label" id="mLabel">請點擊 3D 關節進行控制</span>
         <input type="range" id="mobileSlider" min="0" max="1000" value="500">
@@ -141,13 +136,6 @@
         <div id="debugPanelContent" style="background:rgba(30,30,46,0.92); padding:16px; border-radius:12px; margin-top:8px; max-height:80vh; overflow-y:auto; box-shadow:0 4px 15px rgba(0,0,0,0.5); box-sizing:border-box;">
         <div style="margin-top:10px; margin-bottom:10px; display:flex; justify-content:flex-end; gap:6px;">
             <button id="debugLoadMock" style="font-size:11px; background:#89b4fa; color:#111; border:none; border-radius:6px; padding:4px 8px; cursor:pointer;">載入測試拓樸</button>
-        </div>
-
-        <div style="border:1px solid #45475a; border-radius:8px; padding:10px; margin-bottom:14px;">
-            <div style="font-weight:bold; color:#f38ba8; margin-bottom:4px;">⚠️ 碰撞偵測校正</div>
-            <div style="color:#a6adc8; font-size:11px; margin-bottom:8px;">先把手臂擺在確定安全、沒有碰撞的姿態(例如剛開啟頁面的預設站立姿態),再按下方按鈕校正基準。校正後,系統只會警示"超出這個基準的新重疊"。</div>
-            <button id="calibrateCollisionBtn" style="width:100%; background:#f38ba8; color:#111; border:none; border-radius:6px; padding:6px; cursor:pointer; font-weight:bold; font-size:12px;">在目前姿態校正碰撞基準</button>
-            <div id="calibrateStatus" style="color:#6c7086; font-size:11px; margin-top:6px;">尚未校正</div>
         </div>
 
         <label style="display:block; margin-bottom:4px; color:#a6adc8;">顯示到第幾層</label>
@@ -271,25 +259,6 @@
             mesh.add(new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x111111 })));
         }
 
-        // 🌟 追蹤STL模型是否全部載入完成,碰撞校正一定要等全部載入完才能做,
-        // 不然校正時漏掉還沒載入的零件,之後那些零件出現就會被誤判成"全新的碰撞"
-        const TOTAL_STL_COUNT = 7; // 底座、pivot、body、短轉接頭、延長桿2、延長桿、夾爪
-        let loadedStlCount = 0;
-        function markStlLoaded() {
-            loadedStlCount++;
-            const statusEl = document.getElementById('calibrateStatus');
-            if (statusEl && !hasCalibrated) {
-                statusEl.innerText = `模型載入中 ${loadedStlCount}/${TOTAL_STL_COUNT}...`;
-            }
-            if (loadedStlCount >= TOTAL_STL_COUNT) {
-                // 🌟 全部載入完成,稍微延遲讓場景穩定後,自動校正一次基準
-                setTimeout(() => {
-                    calibrateCollisionBaseline();
-                    if (statusEl) statusEl.innerText = `模型全部載入完成,已自動校正(共${baselineOverlapPairs.size}組預期接觸)`;
-                }, 200);
-            }
-        }
-
         stlLoader.load('./底座成品2.stl', g => {
             // ⚠️ 修正:實際分析發現這個底座檔案裡,Y軸本身就是高度方向(頂端窄圓柱在Y最大處),
             // 不需要像之前那樣做Z->Y的軸向旋轉,那個判斷是錯的
@@ -303,10 +272,9 @@
             baseMesh.position.y = -g.boundingBox.min.y; addBlackEdges(baseMesh); globalBaseGroup.add(baseMesh);
             modulesGroup.position.y = totalHeight; // 🌟 馬達1會自動疊在圓柱頂端,不管底座多高都對
             rebuildTopology(latestTopology);
-            markStlLoaded();
         });
-        stlLoader.load('./pivot.stl', g => { g.rotateY(Math.PI); g.scale(0.5, 0.5, 0.5); pivotStlGeometry = g; rebuildTopology(latestTopology); markStlLoaded(); });
-        stlLoader.load('./body.stl', g => { g.rotateY(Math.PI); g.scale(0.5, 0.5, 0.5); bodyStlGeometry = g; rebuildTopology(latestTopology); markStlLoaded(); });
+        stlLoader.load('./pivot.stl', g => { g.rotateY(Math.PI); g.scale(0.5, 0.5, 0.5); pivotStlGeometry = g; rebuildTopology(latestTopology); });
+        stlLoader.load('./body.stl', g => { g.rotateY(Math.PI); g.scale(0.5, 0.5, 0.5); bodyStlGeometry = g; rebuildTopology(latestTopology); });
 
         // 🌟 新增:短轉接頭(取代原本的pivot.stl,用在馬達1-2、3-4、4-5之間)
         // translate 是把量測到的"起點端中心"平移到原點(0,0,0),方便後續定位
@@ -317,7 +285,6 @@
             g.computeBoundingBox();
             shortConnectorGeometry = g;
             rebuildTopology(latestTopology);
-            markStlLoaded();
         });
 
         // 🌟 新增:延長桿2(只用在馬達2-3之間,L形彎折)
@@ -327,7 +294,6 @@
             g.computeBoundingBox();
             rod2Geometry = g;
             rebuildTopology(latestTopology);
-            markStlLoaded();
         });
 
         // 🌟 新增:延長桿(只用在馬達5-夾爪之間,L形彎折)
@@ -337,7 +303,6 @@
             g.computeBoundingBox();
             rodGeometry = g;
             rebuildTopology(latestTopology);
-            markStlLoaded();
         });
 
         let gripperGeometry;
@@ -349,7 +314,6 @@
             g.computeBoundingBox();
             gripperGeometry = g;
             rebuildTopology(latestTopology);
-            markStlLoaded();
         });
 
         // 🌟 依照節點ID,決定這個位置該額外插入哪個連接件模型
@@ -475,17 +439,12 @@
             }
         }
 
-        // 🌟 碰撞檢測用:記錄每個零件+它在鏈路上的順序編號
-        // 編號規則: 底座=0, 模組id的轉軸=1+(id-1)*3, 外殼=2+(id-1)*3, 後方連接件=3+(id-1)*3, 夾爪=16
-        let collisionMeshes = [];
-
         function rebuildTopology(topo) {
             if (!pivotStlGeometry || !bodyStlGeometry || !baseMesh) return;
             // 🌟 分層校正:只保留 id <= DEBUG_MAX_LAYER 的節點,其餘節點暫時不顯示
             topo = topo.filter(n => n.id <= DEBUG_MAX_LAYER);
             while(modulesGroup.children.length > 0) modulesGroup.remove(modulesGroup.children[0]);
             modules = {};
-            collisionMeshes = [{ mesh: baseMesh, order: 0 }];
             topo.forEach(node => {
                 const group = new THREE.Group(); const rotator = new THREE.Group(); group.add(rotator);
                 // 🌟 修正:pivot是每個模組本身固有的轉軸,永遠都是pivotStlGeometry,不會被連接件取代
@@ -494,8 +453,6 @@
                 rotator.add(bMesh); group.add(pMesh); addBlackEdges(pMesh); addBlackEdges(bMesh);
                 group.userData = { id: node.id, rotator: rotator }; pMesh.userData = { id: node.id, type: 'pivot' }; bMesh.userData = { id: node.id, type: 'body' };
                 modules[node.id] = group;
-                collisionMeshes.push({ mesh: pMesh, order: 1 + (node.id-1)*3 });
-                collisionMeshes.push({ mesh: bMesh, order: 2 + (node.id-1)*3 });
             });
             topo.forEach(node => {
                 if (node.id === 1) modulesGroup.add(modules[1]);
@@ -532,7 +489,6 @@
                             THREE.MathUtils.degToRad(cfg.rot[2])
                         );
                         modules[node.id].userData.rotator.add(cMesh);
-                        collisionMeshes.push({ mesh: cMesh, order: 3 + (node.id-1)*3 });
                     }
 
                     modules[node.id].userData.rotator.add(child);
@@ -553,7 +509,6 @@
                     THREE.MathUtils.degToRad(rodCfg.rot[2])
                 );
                 modules[5].userData.rotator.add(rMesh);
-                collisionMeshes.push({ mesh: rMesh, order: 15 });
 
                 const gMesh = new THREE.Mesh(gripperGeometry, new THREE.MeshPhongMaterial({ color: 0x94e2d5 }));
                 addBlackEdges(gMesh);
@@ -565,7 +520,6 @@
                     THREE.MathUtils.degToRad(rodCfg.childRot[2])
                 );
                 modules[5].userData.rotator.add(gMesh);
-                collisionMeshes.push({ mesh: gMesh, order: 16 });
             }
             
             let maxAxisLen = 100;
@@ -700,67 +654,7 @@
             }
         });
 
-        // 🌟 自我碰撞檢測(基準校正法):
-        // AABB包覆框天生比實際零件"胖",單純用鏈路距離判斷相鄰,範圍常常不夠寬,會有大量誤判。
-        // 改用校正機制:先在確定安全的姿態下,把當下所有重疊的配對記錄成"白名單"(視為正常接觸),
-        // 之後只有出現"白名單以外的新重疊"才判定為真正的碰撞。
-        let baselineOverlapPairs = new Set();
-        let hasCalibrated = false;
-
-        const COLLISION_SHRINK_MARGIN = 3; // 🌟 安全邊界(場景單位,約等於實際6mm),減少"剛好擦邊"的誤判
-
-        // 🌟 取得零件在世界座標系裡的包覆球體(不是矩形!)
-        // 球體的優點:不管零件怎麼旋轉,球體大小都不會變(矩形則會因為斜放而膨脹變大),
-        // 這是造成之前"零件一轉動就誤判"的根本原因
-        function getWorldSphere(mesh) {
-            if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
-            const local = mesh.geometry.boundingSphere;
-            const worldCenter = local.center.clone();
-            mesh.localToWorld(worldCenter);
-            const scale = new THREE.Vector3();
-            mesh.matrixWorld.decompose(new THREE.Vector3(), new THREE.Quaternion(), scale);
-            const worldRadius = local.radius * Math.max(scale.x, scale.y, scale.z);
-            return { center: worldCenter, radius: worldRadius };
-        }
-
-        function computeAllOverlapPairs() {
-            const spheres = collisionMeshes.map(item => ({
-                sphere: getWorldSphere(item.mesh),
-                order: item.order
-            }));
-            const overlaps = new Set();
-            for (let i = 0; i < spheres.length; i++) {
-                for (let j = i + 1; j < spheres.length; j++) {
-                    const dist = spheres[i].sphere.center.distanceTo(spheres[j].sphere.center);
-                    const combinedRadius = spheres[i].sphere.radius + spheres[j].sphere.radius - COLLISION_SHRINK_MARGIN;
-                    if (dist < combinedRadius) {
-                        const a = Math.min(spheres[i].order, spheres[j].order);
-                        const b = Math.max(spheres[i].order, spheres[j].order);
-                        overlaps.add(a + '-' + b);
-                    }
-                }
-            }
-            return overlaps;
-        }
-
-        // 🌟 在目前姿態下校正基準(手臂要先擺在確定沒有碰撞的姿態,例如剛開啟頁面的預設站立姿態)
-        function calibrateCollisionBaseline() {
-            if (collisionMeshes.length === 0) return;
-            baselineOverlapPairs = computeAllOverlapPairs();
-            hasCalibrated = true;
-        }
-
-        function checkSelfCollision() {
-            if (!hasCalibrated || collisionMeshes.length === 0) return false;
-            const current = computeAllOverlapPairs();
-            for (const key of current) {
-                if (!baselineOverlapPairs.has(key)) return true; // 出現基準以外的新重疊 = 真正的碰撞
-            }
-            return false;
-        }
-
         let worldVec = new THREE.Vector3();
-        let collisionCheckFrameCounter = 0;
         function animate() {
             requestAnimationFrame(animate); controls.update();
             for (let id in serverAngles) if (modules[id]) {
@@ -776,17 +670,6 @@
             } else {
                 document.getElementById('xyzDisplay').innerHTML = `X: 0.0 <br>Y: 0.0 <br>Z: 0.0`;
             }
-
-            // 🌟 每10幀檢查一次碰撞(約6次/秒),避免每幀都算造成效能負擔
-            collisionCheckFrameCounter++;
-            if (collisionCheckFrameCounter % 10 === 0 && collisionMeshes.length > 0) {
-                const collided = checkSelfCollision();
-                const badge = document.getElementById('collisionBadge');
-                if (badge) {
-                    badge.style.display = collided ? 'block' : 'none';
-                }
-            }
-
             renderer.render(scene, camera);
         }
         animate();
@@ -857,13 +740,6 @@
         document.getElementById('debugLoadMock').addEventListener('click', () => {
             latestTopology = MOCK_TOPOLOGY;
             rebuildTopology(MOCK_TOPOLOGY);
-            // 🌟 不在這裡直接校正:校正時機交給 markStlLoaded() 確保全部STL真的載入完成才做,避免用不完整的模型校正
-        });
-
-        document.getElementById('calibrateCollisionBtn').addEventListener('click', () => {
-            calibrateCollisionBaseline();
-            document.getElementById('calibrateStatus').innerText = `已於 ${new Date().toLocaleTimeString()} 手動校正(共${baselineOverlapPairs.size}組預期接觸)`;
-            document.getElementById('collisionBadge').style.display = 'none'; // 校正當下先隱藏警示,避免殘留舊狀態
         });
 
         // 🌟 視覺呈現方向修正:數學模型(ikForwardKinematics)裡,馬達2/3/5都是繞Y軸,
