@@ -271,6 +271,25 @@
             mesh.add(new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x111111 })));
         }
 
+        // 🌟 追蹤STL模型是否全部載入完成,碰撞校正一定要等全部載入完才能做,
+        // 不然校正時漏掉還沒載入的零件,之後那些零件出現就會被誤判成"全新的碰撞"
+        const TOTAL_STL_COUNT = 7; // 底座、pivot、body、短轉接頭、延長桿2、延長桿、夾爪
+        let loadedStlCount = 0;
+        function markStlLoaded() {
+            loadedStlCount++;
+            const statusEl = document.getElementById('calibrateStatus');
+            if (statusEl && !hasCalibrated) {
+                statusEl.innerText = `模型載入中 ${loadedStlCount}/${TOTAL_STL_COUNT}...`;
+            }
+            if (loadedStlCount >= TOTAL_STL_COUNT) {
+                // 🌟 全部載入完成,稍微延遲讓場景穩定後,自動校正一次基準
+                setTimeout(() => {
+                    calibrateCollisionBaseline();
+                    if (statusEl) statusEl.innerText = `模型全部載入完成,已自動校正(共${baselineOverlapPairs.size}組預期接觸)`;
+                }, 200);
+            }
+        }
+
         stlLoader.load('./底座成品2.stl', g => {
             // ⚠️ 修正:實際分析發現這個底座檔案裡,Y軸本身就是高度方向(頂端窄圓柱在Y最大處),
             // 不需要像之前那樣做Z->Y的軸向旋轉,那個判斷是錯的
@@ -284,9 +303,10 @@
             baseMesh.position.y = -g.boundingBox.min.y; addBlackEdges(baseMesh); globalBaseGroup.add(baseMesh);
             modulesGroup.position.y = totalHeight; // 🌟 馬達1會自動疊在圓柱頂端,不管底座多高都對
             rebuildTopology(latestTopology);
+            markStlLoaded();
         });
-        stlLoader.load('./pivot.stl', g => { g.rotateY(Math.PI); g.scale(0.5, 0.5, 0.5); pivotStlGeometry = g; rebuildTopology(latestTopology); });
-        stlLoader.load('./body.stl', g => { g.rotateY(Math.PI); g.scale(0.5, 0.5, 0.5); bodyStlGeometry = g; rebuildTopology(latestTopology); });
+        stlLoader.load('./pivot.stl', g => { g.rotateY(Math.PI); g.scale(0.5, 0.5, 0.5); pivotStlGeometry = g; rebuildTopology(latestTopology); markStlLoaded(); });
+        stlLoader.load('./body.stl', g => { g.rotateY(Math.PI); g.scale(0.5, 0.5, 0.5); bodyStlGeometry = g; rebuildTopology(latestTopology); markStlLoaded(); });
 
         // 🌟 新增:短轉接頭(取代原本的pivot.stl,用在馬達1-2、3-4、4-5之間)
         // translate 是把量測到的"起點端中心"平移到原點(0,0,0),方便後續定位
@@ -297,6 +317,7 @@
             g.computeBoundingBox();
             shortConnectorGeometry = g;
             rebuildTopology(latestTopology);
+            markStlLoaded();
         });
 
         // 🌟 新增:延長桿2(只用在馬達2-3之間,L形彎折)
@@ -306,6 +327,7 @@
             g.computeBoundingBox();
             rod2Geometry = g;
             rebuildTopology(latestTopology);
+            markStlLoaded();
         });
 
         // 🌟 新增:延長桿(只用在馬達5-夾爪之間,L形彎折)
@@ -315,6 +337,7 @@
             g.computeBoundingBox();
             rodGeometry = g;
             rebuildTopology(latestTopology);
+            markStlLoaded();
         });
 
         let gripperGeometry;
@@ -326,6 +349,7 @@
             g.computeBoundingBox();
             gripperGeometry = g;
             rebuildTopology(latestTopology);
+            markStlLoaded();
         });
 
         // 🌟 依照節點ID,決定這個位置該額外插入哪個連接件模型
@@ -683,11 +707,14 @@
         let baselineOverlapPairs = new Set();
         let hasCalibrated = false;
 
+        const COLLISION_SHRINK_MARGIN = 3; // 🌟 包覆框主動內縮的邊界(場景單位,約等於實際6mm),減少"剛好擦邊"的誤判
+
         function computeAllOverlapPairs() {
-            const boxes = collisionMeshes.map(item => ({
-                box: new THREE.Box3().setFromObject(item.mesh),
-                order: item.order
-            }));
+            const boxes = collisionMeshes.map(item => {
+                const box = new THREE.Box3().setFromObject(item.mesh);
+                box.expandByScalar(-COLLISION_SHRINK_MARGIN); // 負值=內縮
+                return { box, order: item.order };
+            });
             const overlaps = new Set();
             for (let i = 0; i < boxes.length; i++) {
                 for (let j = i + 1; j < boxes.length; j++) {
@@ -815,11 +842,7 @@
         document.getElementById('debugLoadMock').addEventListener('click', () => {
             latestTopology = MOCK_TOPOLOGY;
             rebuildTopology(MOCK_TOPOLOGY);
-            // 🌟 載入測試拓樸後,稍微延遲讓場景穩定,自動校正一次基準(此時角度都是預設值,是安全姿態)
-            setTimeout(() => {
-                calibrateCollisionBaseline();
-                document.getElementById('calibrateStatus').innerText = `已於 ${new Date().toLocaleTimeString()} 自動校正`;
-            }, 300);
+            // 🌟 不在這裡直接校正:校正時機交給 markStlLoaded() 確保全部STL真的載入完成才做,避免用不完整的模型校正
         });
 
         document.getElementById('calibrateCollisionBtn').addEventListener('click', () => {
