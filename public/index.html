@@ -159,6 +159,7 @@
             <div style="font-weight:bold; color:#f38ba8; margin-bottom:4px;">⚠️ 自我碰撞檢測(膠囊體法,場景自己的比例)</div>
             <div style="color:#a6adc8; font-size:11px; margin-bottom:8px;">操作上面的關節滑桿,肉眼確認畫面上有沒有真的碰在一起,再用下面滑桿調整半徑,直到警示跟肉眼判斷一致</div>
             <div id="collisionRadiusSliders"></div>
+            <div id="baseMarginSlider" style="margin-top:6px;"></div>
             <div id="collisionLiveStatus" style="margin-top:8px; font-size:12px; color:#a6e3a1;">目前:安全</div>
             <div id="collisionDetail" style="font-size:11px; color:#6c7086; margin-top:4px;"></div>
         </div>
@@ -710,6 +711,7 @@
 
         // 🌟 每段連桿的半徑(場景單位),先給合理起始值,之後可以用下面的滑桿現場微調
         let SEGMENT_RADIUS_WEB = [15, 12, 14, 12, 12, 14, 18]; // 對應P0-P1 ~ P5-P6 共6段(其實用到index0~5)
+        let BASE_SHRINK_MARGIN = 5; // 🌟 底座包覆框內縮邊界(場景單位),越大代表底座判定範圍越小、越寬容
 
         function getChainPoints() {
             const pts = [];
@@ -740,7 +742,7 @@
             // 🌟 修正:包覆框往內縮一點,避免馬達1的掛載點剛好貼在底座頂面邊界上,被誤判成永遠碰撞
             if (baseMesh) {
                 const baseBox = new THREE.Box3().setFromObject(baseMesh);
-                baseBox.expandByScalar(-5); // 內縮5個場景單位當安全邊界
+                baseBox.expandByScalar(-BASE_SHRINK_MARGIN); // 🌟 內縮邊界改成可調整的變數
                 for (let i = 1; i < nSeg; i++) { // 跳過連桿0(底座->馬達1本身)
                     for (let t = 0.15; t <= 1; t += 0.2) { // 🌟 從0.15開始,不要檢查連桿1的最起點(=馬達1掛載點本身)
                         const p = pts[i].clone().lerp(pts[i+1], t);
@@ -896,6 +898,9 @@
             makeSlider(collisionRadiusContainer, label, 0, 40, 1, SEGMENT_RADIUS_WEB[i], v => {
                 SEGMENT_RADIUS_WEB[i] = v;
             });
+        });
+        makeSlider(document.getElementById('baseMarginSlider'), '底座判定內縮邊界', 0, 30, 1, BASE_SHRINK_MARGIN, v => {
+            BASE_SHRINK_MARGIN = v;
         });
 
         // ======================================================
