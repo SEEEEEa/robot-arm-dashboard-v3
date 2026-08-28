@@ -460,6 +460,7 @@
             topo = topo.filter(n => n.id <= DEBUG_MAX_LAYER);
             while(modulesGroup.children.length > 0) modulesGroup.remove(modulesGroup.children[0]);
             modules = {};
+            let gripperMarkerAttached = false;
             topo.forEach(node => {
                 const group = new THREE.Group(); const rotator = new THREE.Group(); group.add(rotator);
                 // 🌟 修正:pivot是每個模組本身固有的轉軸,永遠都是pivotStlGeometry,不會被連接件取代
@@ -535,16 +536,26 @@
                     THREE.MathUtils.degToRad(rodCfg.childRot[2])
                 );
                 modules[5].userData.rotator.add(gMesh);
+
+                // 🌟 修正:夾爪存在時,末端追蹤點要跟著真正的夾爪模型走,
+                // 不能再用底下那段給"沒有夾爪時"用的寫死偏移量(0,44.5,0)
+                // 夾爪STL原點是"安裝端"(不是尖端),真正的尖端在局部座標X方向約70.7處(對應實測142mm長度*0.5縮放)
+                endEffectorMarker.position.set(70.7, 0, 0);
+                gMesh.add(endEffectorMarker);
+                gripperMarkerAttached = true;
             }
             
             let maxAxisLen = 100;
             if (topo.length > 0) {
                 maxAxisLen = Math.max(100, topo.length * 44.5 + 22.5);
-                
-                // 🌟 修復 3：把追蹤點放在最後一顆積木的「頂端」(高度 44.5)，這樣抓出來的座標才會是準的！
-                const lastNodeId = topo[topo.length - 1].id;
-                endEffectorMarker.position.set(0, 44.5, 0); 
-                modules[lastNodeId].userData.rotator.add(endEffectorMarker);
+
+                // 🌟 只有在"沒有夾爪"的情況下才用這個舊的寫死偏移量,
+                // 夾爪存在時,標記點已經在上面正確掛在真實的gMesh上了,不要在這裡蓋回去
+                if (!gripperMarkerAttached) {
+                    const lastNodeId = topo[topo.length - 1].id;
+                    endEffectorMarker.position.set(0, 44.5, 0);
+                    modules[lastNodeId].userData.rotator.add(endEffectorMarker);
+                }
             }
             axesHelper.scale.set(1, maxAxisLen / 100, 1);
             labelX.position.set(110, 0, 0); labelY.position.set(0, maxAxisLen + 5, 0); labelZ.position.set(0, 0, 110);
