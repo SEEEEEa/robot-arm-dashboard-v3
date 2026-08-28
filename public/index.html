@@ -332,10 +332,9 @@
         // short: 已依實測幾何算出第一版起始值(繞Z軸轉90度,讓自身57mm的長度方向對齊到場景的Y軸延伸方向)
         // rod2/rod: 還沒開始校正,暫時維持預設值
         const DEFAULT_CONNECTOR_CONFIG = {
-            // 🌟 childOffset已依真實毫米數重新校正(原本網頁比例比真實世界小了約18~23%,方向不變,只調整長度)
-            short: { pos: [-31, 10.5, 0], rot: [180, 0, 270], childOffset: [-49.6, 30.1, 0], childRot: [180, 0, 90] },
-            rod2:  { pos: [-78.5, -5, 0], rot: [180, 0, 270], childOffset: [-82.9, -20.1, 0], childRot: [180, 0, 0] },
-            rod:   { pos: [-67, -53, 0], rot: [180, 0, 270], childOffset: [-79.5, -48.9, 0], childRot: [0, 0, 180] },
+            short: { pos: [-31, 10.5, 0], rot: [180, 0, 270], childOffset: [-39.5, 24, 0], childRot: [180, 0, 90] },
+            rod2:  { pos: [-78.5, -5, 0], rot: [180, 0, 270], childOffset: [-64, -15.5, 0], childRot: [180, 0, 0] },
+            rod:   { pos: [-67, -53, 0], rot: [180, 0, 270], childOffset: [-65, -40, 0], childRot: [0, 0, 180] },
         };
         // 🌟 連接件關係已校正完成並鎖定,不再提供UI編輯
         const CONNECTOR_CONFIG = DEFAULT_CONNECTOR_CONFIG;
