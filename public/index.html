@@ -270,8 +270,6 @@
         const modulesGroup = new THREE.Group(); globalBaseGroup.add(modulesGroup); 
         // 🌟 隱形的末端追蹤點，用來精準抓取座標
         const endEffectorMarker = new THREE.Object3D(); 
-        const cornerMarker2 = new THREE.Object3D(); // 🌟 延長桿2的轉角標記點
-        const cornerMarker5 = new THREE.Object3D(); // 🌟 延長桿的轉角標記點
 
         let modules = {}; let latestTopology = []; let serverAngles = {}; let selectedNodeId = 0;
         let currentTopologyStr = ""; 
@@ -473,8 +471,6 @@
             while(modulesGroup.children.length > 0) modulesGroup.remove(modulesGroup.children[0]);
             modules = {};
             let gripperMarkerAttached = false;
-            let corner2Attached = false;
-            let corner5Attached = false;
             topo.forEach(node => {
                 const group = new THREE.Group(); const rotator = new THREE.Group(); group.add(rotator);
                 // 🌟 修正:pivot是每個模組本身固有的轉軸,永遠都是pivotStlGeometry,不會被連接件取代
@@ -519,13 +515,6 @@
                             THREE.MathUtils.degToRad(cfg.rot[2])
                         );
                         modules[node.id].userData.rotator.add(cMesh);
-
-                        // 🌟 延長桿2是L形彎折,加上轉角標記點,讓碰撞判斷能拆成兩截膠囊體
-                        if (ctype === 'rod2') {
-                            cornerMarker2.position.set(16.74, 63.92, -10.78);
-                            cMesh.add(cornerMarker2);
-                            corner2Attached = true;
-                        }
                     }
 
                     modules[node.id].userData.rotator.add(child);
@@ -546,11 +535,6 @@
                     THREE.MathUtils.degToRad(rodCfg.rot[2])
                 );
                 modules[5].userData.rotator.add(rMesh);
-
-                // 🌟 延長桿也是L形彎折,加上轉角標記點
-                cornerMarker5.position.set(71.72, 10.93, 0.31);
-                rMesh.add(cornerMarker5);
-                corner5Attached = true;
 
                 const gMesh = new THREE.Mesh(gripperGeometry, new THREE.MeshPhongMaterial({ color: 0x94e2d5 }));
                 addBlackEdges(gMesh);
@@ -736,9 +720,7 @@
 
         // 🌟 每段連桿的半徑(場景單位),先給合理起始值,之後可以用下面的滑桿現場微調
         // 🌟 以下數值是實際在畫面上肉眼校正過的結果(寧可誤判碰撞,也不要漏掉真正的碰撞)
-        // 🌟 因為延長桿2、延長桿都拆成兩截膠囊體了,陣列從6段變成8段
-        // 拆開的部分先沿用原本校正過的數值當起點,之後可以用滑桿分別微調
-        let SEGMENT_RADIUS_WEB = [11, 32, 20, 20, 1, 21, 30, 30]; // 對應連桿0~7
+        let SEGMENT_RADIUS_WEB = [11, 32, 20, 1, 21, 30]; // 對應連桿0~5(P0-P1 ~ P5-P6)
         let BASE_SHRINK_MARGIN = 9; // 🌟 底座包覆框內縮邊界(場景單位),越大代表底座判定範圍越小、越寬容
         let GROUND_Y_OFFSET = -30; // 🌟 地板高度基準的微調偏移量
         floorPlaneHelper.position.y = GROUND_Y_OFFSET; // 🌟 頁面載入時就直接套用,不用等使用者動滑桿
@@ -746,21 +728,11 @@
         function getChainPoints() {
             const pts = [];
             const v = new THREE.Vector3();
-            modulesGroup.getWorldPosition(v); pts.push(v.clone()); // P0 底座
+            modulesGroup.getWorldPosition(v); pts.push(v.clone());
             for (let id = 1; id <= 5; id++) {
-                if (modules[id]) {
-                    modules[id].userData.rotator.getWorldPosition(v); pts.push(v.clone());
-                    // 🌟 馬達2後面插入延長桿2的轉角點(把原本一整段拆成兩截膠囊體)
-                    if (id === 2 && modules[3]) {
-                        cornerMarker2.getWorldPosition(v); pts.push(v.clone());
-                    }
-                }
+                if (modules[id]) { modules[id].userData.rotator.getWorldPosition(v); pts.push(v.clone()); }
             }
-            if (DEBUG_MAX_LAYER >= 6 && modules[5] && gripperGeometry) {
-                // 🌟 馬達5後面插入延長桿的轉角點,再接夾爪
-                cornerMarker5.getWorldPosition(v); pts.push(v.clone());
-                endEffectorMarker.getWorldPosition(v); pts.push(v.clone());
-            }
+            if (latestTopology.length > 0) { endEffectorMarker.getWorldPosition(v); pts.push(v.clone()); }
             return pts;
         }
 
@@ -933,7 +905,7 @@
 
         // 🌟 六段連桿半徑調整滑桿(場景單位),對照肉眼判斷現場微調
         const collisionRadiusContainer = document.getElementById('collisionRadiusSliders');
-        const segLabels = ['P0-P1(底座-馬達1)', 'P1-P2(馬達1-2)', 'P2-C2(馬達2-轉角)', 'C2-P3(轉角-馬達3)', 'P3-P4(馬達3-4)', 'P4-P5(馬達4-5)', 'P5-C5(馬達5-轉角)', 'C5-P6(轉角-夾爪)'];
+        const segLabels = ['P0-P1(底座-馬達1)', 'P1-P2(馬達1-2)', 'P2-P3(馬達2-3)', 'P3-P4(馬達3-4)', 'P4-P5(馬達4-5)', 'P5-P6(馬達5-夾爪)'];
         segLabels.forEach((label, i) => {
             makeSlider(collisionRadiusContainer, label, 0, 40, 1, SEGMENT_RADIUS_WEB[i], v => {
                 SEGMENT_RADIUS_WEB[i] = v;
