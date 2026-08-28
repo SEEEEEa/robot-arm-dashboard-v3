@@ -726,10 +726,12 @@
             }
 
             // 底座碰撞:直接用baseMesh真實的世界座標包覆框判斷,不用另外近似
+            // 🌟 修正:包覆框往內縮一點,避免馬達1的掛載點剛好貼在底座頂面邊界上,被誤判成永遠碰撞
             if (baseMesh) {
                 const baseBox = new THREE.Box3().setFromObject(baseMesh);
+                baseBox.expandByScalar(-5); // 內縮5個場景單位當安全邊界
                 for (let i = 1; i < nSeg; i++) { // 跳過連桿0(底座->馬達1本身)
-                    for (let t = 0; t <= 1; t += 0.2) {
+                    for (let t = 0.15; t <= 1; t += 0.2) { // 🌟 從0.15開始,不要檢查連桿1的最起點(=馬達1掛載點本身)
                         const p = pts[i].clone().lerp(pts[i+1], t);
                         if (baseBox.containsPoint(p)) { details.push(`連桿${i} 撞入底座`); break; }
                     }
