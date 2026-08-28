@@ -258,6 +258,15 @@
         const dirLight = new THREE.DirectionalLight(0xffffff, 0.8); dirLight.position.set(100, 150, 50); scene.add(dirLight);
 
         const globalBaseGroup = new THREE.Group(); scene.add(globalBaseGroup);
+
+        // 🌟 半透明地板參考平面,方便肉眼比對碰撞判斷邏輯認定的"地板"在哪裡,
+        // 正常情況下應該貼齊底座最底部;如果看起來卡在底座中間高度,代表GROUND_Y_OFFSET需要往下調(給負值)
+        const floorPlaneHelper = new THREE.Mesh(
+            new THREE.PlaneGeometry(400, 400),
+            new THREE.MeshBasicMaterial({ color: 0xf38ba8, transparent: true, opacity: 0.15, side: THREE.DoubleSide })
+        );
+        floorPlaneHelper.rotation.x = -Math.PI/2;
+        scene.add(floorPlaneHelper);
         const modulesGroup = new THREE.Group(); globalBaseGroup.add(modulesGroup); 
         // 🌟 隱形的末端追蹤點，用來精準抓取座標
         const endEffectorMarker = new THREE.Object3D(); 
@@ -712,6 +721,7 @@
         // 🌟 每段連桿的半徑(場景單位),先給合理起始值,之後可以用下面的滑桿現場微調
         let SEGMENT_RADIUS_WEB = [15, 12, 14, 12, 12, 14, 18]; // 對應P0-P1 ~ P5-P6 共6段(其實用到index0~5)
         let BASE_SHRINK_MARGIN = 5; // 🌟 底座包覆框內縮邊界(場景單位),越大代表底座判定範圍越小、越寬容
+        let GROUND_Y_OFFSET = 0; // 🌟 地板高度基準的微調偏移量,如果誤判可以現場拉高/拉低這條線
 
         function getChainPoints() {
             const pts = [];
@@ -753,7 +763,7 @@
 
             // 地板碰撞:Y座標低於底座底部(=0),要扣掉該連桿自己的半徑
             for (let i = 0; i < nSeg; i++) {
-                const floorThresh = (SEGMENT_RADIUS_WEB[i]||15);
+                const floorThresh = GROUND_Y_OFFSET + (SEGMENT_RADIUS_WEB[i]||15);
                 for (let t = 0; t <= 1; t += 0.2) {
                     const p = pts[i].clone().lerp(pts[i+1], t);
                     if (p.y < floorThresh) { details.push(`連桿${i} 觸底: Y=${p.y.toFixed(1)}`); break; }
@@ -901,6 +911,10 @@
         });
         makeSlider(document.getElementById('baseMarginSlider'), '底座判定內縮邊界', 0, 30, 1, BASE_SHRINK_MARGIN, v => {
             BASE_SHRINK_MARGIN = v;
+        });
+        makeSlider(document.getElementById('baseMarginSlider'), '地板高度微調(0=場景原點)', -60, 60, 1, GROUND_Y_OFFSET, v => {
+            GROUND_Y_OFFSET = v;
+            floorPlaneHelper.position.y = v;
         });
 
         // ======================================================
