@@ -1046,6 +1046,71 @@
 
         // 🌟 targetDir 可以是 null:此時只用位置(3個限制條件)求解,不管方向,
         // 對5顆馬達來說限制條件變少,更容易找到解,適合"只想到達某個位置,不在乎朝向"的情況
+        // 🌟 即時把某組角度套用到3D場景(不透過平滑動畫,用於碰撞測試),並強制更新世界座標矩陣
+        function poseSceneInstantly(thetas) {
+            for (let i = 0; i < 5; i++) {
+                if (modules[i+1]) {
+                    const visualDeg = thetas[i] * VISUAL_SIGN[i];
+                    modules[i+1].userData.rotator.rotation.y = THREE.MathUtils.degToRad(visualDeg);
+                }
+            }
+            scene.updateMatrixWorld(true);
+        }
+
+        // 🌟 蒐集所有候選解(熱啟動+5組多起點),不是只挑一個就回傳,方便外層逐一檢查碰撞
+        function ikSolveAllCandidates(targetPos, targetDir) {
+            const posOnly = !targetDir;
+            let targetVec;
+            if (posOnly) {
+                targetVec = [targetPos[0], targetPos[1], targetPos[2]];
+            } else {
+                const dl = Math.hypot(targetDir[0], targetDir[1], targetDir[2]) || 1;
+                targetVec = [targetPos[0], targetPos[1], targetPos[2],
+                    (targetDir[0]/dl)*IK_ORIENT_WEIGHT, (targetDir[1]/dl)*IK_ORIENT_WEIGHT, (targetDir[2]/dl)*IK_ORIENT_WEIGHT];
+            }
+            const h = 0.05;
+            const candidates = [];
+
+            const warmResult = ikRunSingleAttempt(lastIkThetas, targetVec, h, posOnly);
+            warmResult.warmStarted = true;
+            candidates.push(warmResult);
+
+            const restarts = [
+                [0,0,0,0,0], [30,-30,30,0,-30], [-30,40,-40,20,30], [10,-60,60,-10,-20], [0,60,-60,0,40],
+            ];
+            for (const init of restarts) {
+                candidates.push(ikRunSingleAttempt(init, targetVec, h, posOnly));
+            }
+            return candidates;
+        }
+
+        // 🌟 結合IK跟碰撞檢查:在所有候選解裡,優先找"有解又不會碰撞"的,
+        // 找不到才退而求其次找"有解但會碰撞"的,兩者都沒有才是"完全無法到達"
+        function ikSolveAvoidingCollision(targetPos, targetDir) {
+            const candidates = ikSolveAllCandidates(targetPos, targetDir);
+
+            let bestCollisionFree = null;
+            let bestFeasibleAny = null;
+
+            for (const c of candidates) {
+                if (!c.feasible) continue;
+                if (!bestFeasibleAny || c.errNorm < bestFeasibleAny.errNorm) bestFeasibleAny = c;
+
+                poseSceneInstantly(c.thetas);
+                const collResult = checkSelfCollisionWeb();
+                c.collided = collResult.collided;
+                c.collisionDetails = collResult.details;
+
+                if (!c.collided && (!bestCollisionFree || c.errNorm < bestCollisionFree.errNorm)) {
+                    bestCollisionFree = c;
+                }
+            }
+
+            if (bestCollisionFree) return { status: 'success', result: bestCollisionFree };
+            if (bestFeasibleAny) return { status: 'collision', result: bestFeasibleAny };
+            return { status: 'unreachable', result: null };
+        }
+
         function ikSolve(targetPos, targetDir) {
             const posOnly = !targetDir;
             let targetVec;
@@ -1113,31 +1178,46 @@
             const y = parseFloat(document.getElementById('ikY').value);
             const z = parseFloat(document.getElementById('ikZ').value);
 
-            let dir = null; // 🌟 僅位置模式時,dir維持null,ikSolve內部會自動切換成3維(只看位置)求解
+            let dir = null; // 🌟 僅位置模式時,dir維持null,內部會自動切換成3維(只看位置)求解
             if (!ikPosOnlyMode) {
                 const yawR = ikDeg2rad(ikDir.yaw), pitchR = ikDeg2rad(ikDir.pitch);
                 dir = [Math.cos(pitchR)*Math.cos(yawR), Math.cos(pitchR)*Math.sin(yawR), Math.sin(pitchR)];
             }
 
-            const result = ikSolve([x, y, z], dir);
+            const { status, result } = ikSolveAvoidingCollision([x, y, z], dir);
             const statusEl = document.getElementById('ikStatus');
 
-            if (!result.feasible) {
-                statusEl.innerHTML = `<span style="color:#f38ba8;">⚠ 無法到達此目標</span><br>誤差 ${result.errNorm.toFixed(1)}`;
+            // 🌟 情況1:完全無法到達 —— 連IK數學上都找不到任何合理接近目標的解
+            if (status === 'unreachable') {
+                statusEl.innerHTML = `<span style="color:#f38ba8; font-weight:bold;">❌ 完全無法到達此目標</span><br>連運動學上都找不到接近的解,可能超出手臂工作空間`;
                 return;
             }
 
+            // 套用找到的最佳解(不管有沒有碰撞,都先讓畫面呈現這個姿態,方便你直接看到問題)
             for (let i = 0; i < 5; i++) {
                 const visualDeg = result.thetas[i] * VISUAL_SIGN[i];
                 serverAngles[i+1] = degToServoPos(visualDeg);
-                manualJointInputs[i].setDisplayValue(visualDeg); // 🌟 同步更新滑桿顯示
+                manualJointInputs[i].setDisplayValue(visualDeg);
             }
-            lastIkThetas = [...result.thetas]; // 🌟 記住這次的解,下次求解優先從這裡熱啟動
-            statusEl.innerHTML = `<span style="color:#a6e3a1;">${result.converged ? '已收斂' : '接近解'}</span> 誤差${result.errNorm.toFixed(2)} 迭代${result.iters}次` +
+            lastIkThetas = [...result.thetas];
+
+            const angleText = result.thetas.map((t,i) => `M${i+1}:${t.toFixed(1)}°`).join(' ');
+
+            // 🌟 情況2:可以到達,但每一組能到達的解都會造成機構碰撞
+            if (status === 'collision') {
+                statusEl.innerHTML = `<span style="color:#f9e2af; font-weight:bold;">⚠️ 可到達,但會發生機構碰撞</span><br>` +
+                    `試過所有解法,沒有一組是安全的<br>` +
+                    `<span style="color:#6c7086;">碰撞細節:${(result.collisionDetails||[]).slice(0,2).join(' | ')}</span><br>` +
+                    `<span style="color:#6c7086;">(以下角度給硬體用,3D畫面已自動做方向校正顯示)</span><br>${angleText}`;
+                return;
+            }
+
+            // 🌟 情況3:成功 —— 找到至少一組能到達、且不會碰撞的解
+            statusEl.innerHTML = `<span style="color:#a6e3a1; font-weight:bold;">✅ 成功到達(無碰撞)</span> ` +
+                `誤差${result.errNorm.toFixed(2)} 迭代${result.iters}次` +
                 `${result.warmStarted ? ' <span style="color:#89b4fa;">(延續前次姿態)</span>' : ' <span style="color:#f9e2af;">(重新搜尋新解)</span>'}` +
                 `${ikPosOnlyMode ? ' <span style="color:#6c7086;">[僅位置模式]</span>' : ''}<br>` +
-                `<span style="color:#6c7086;">(以下是真實角度,給硬體用,3D畫面已自動做方向校正顯示)</span><br>` +
-                result.thetas.map((t,i) => `M${i+1}:${t.toFixed(1)}°`).join(' ');
+                `<span style="color:#6c7086;">(以下角度給硬體用,3D畫面已自動做方向校正顯示)</span><br>${angleText}`;
         });
     </script>
 </body>
