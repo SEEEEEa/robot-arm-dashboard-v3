@@ -720,7 +720,7 @@
 
         // 🌟 每段連桿的半徑(場景單位),先給合理起始值,之後可以用下面的滑桿現場微調
         // 🌟 以下數值是實際在畫面上肉眼校正過的結果(寧可誤判碰撞,也不要漏掉真正的碰撞)
-        let SEGMENT_RADIUS_WEB = [11, 32, 20, 1, 21, 30]; // 對應連桿0~5(P0-P1 ~ P5-P6)
+        let SEGMENT_RADIUS_WEB = [11, 38, 20, 1, 23, 32]; // 對應連桿0~5(P0-P1 ~ P5-P6)
         let BASE_SHRINK_MARGIN = 9; // 🌟 底座包覆框內縮邊界(場景單位),越大代表底座判定範圍越小、越寬容
         let GROUND_Y_OFFSET = -30; // 🌟 地板高度基準的微調偏移量
         floorPlaneHelper.position.y = GROUND_Y_OFFSET; // 🌟 頁面載入時就直接套用,不用等使用者動滑桿
