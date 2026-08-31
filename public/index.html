@@ -346,6 +346,18 @@
             rebuildTopology(latestTopology);
         });
 
+        let gravityCompGeometry;
+        // 🌟 新增:重力補償機構,純視覺呈現,不影響碰撞檢測或IK。
+        // translate把假設的"接馬達2那端"(X座標較大這端,197.5)平移到原點,方便掛載在馬達2的旋轉座標上
+        // ⚠️ 待確認:方向/位置可能需要依實際畫面微調
+        stlLoader.load('./重力補償.stl', g => {
+            g.translate(-197.5, 0, 0);
+            g.scale(0.5, 0.5, 0.5);
+            g.computeBoundingBox();
+            gravityCompGeometry = g;
+            rebuildTopology(latestTopology);
+        });
+
         // 🌟 依照節點ID,決定這個位置該額外插入哪個連接件模型
         // (這是插在pivot跟下一個模組之間的東西,不是取代pivot)
         function getConnectorGeometry(nodeId) {
@@ -368,6 +380,9 @@
         };
         // 🌟 連接件關係已校正完成並鎖定,不再提供UI編輯
         const CONNECTOR_CONFIG = DEFAULT_CONNECTOR_CONFIG;
+
+        // 🌟 重力補償機構的位置/旋轉,純視覺呈現用,起始值需要之後依實際畫面微調
+        let GRAVITY_COMP_CONFIG = { pos: [0, 0, 0], rot: [0, 0, 0] };
 
         function connectorTypeForNode(nodeId) {
             if (nodeId === 2) return 'rod2';
@@ -484,6 +499,20 @@
                 rotator.add(bMesh); group.add(pMesh); addBlackEdges(pMesh); addBlackEdges(bMesh);
                 group.userData = { id: node.id, rotator: rotator }; pMesh.userData = { id: node.id, type: 'pivot' }; bMesh.userData = { id: node.id, type: 'body' };
                 modules[node.id] = group;
+
+                // 🌟 重力補償機構:只掛在馬達2上,純視覺呈現,跟著馬達2一起旋轉,不影響碰撞檢測或IK
+                if (node.id === 2 && gravityCompGeometry) {
+                    const gcMesh = new THREE.Mesh(gravityCompGeometry, new THREE.MeshPhongMaterial({ color: 0xf5c2e7 }));
+                    addBlackEdges(gcMesh);
+                    gcMesh.userData = { id: 2, type: 'gravityComp' };
+                    gcMesh.position.set(GRAVITY_COMP_CONFIG.pos[0], GRAVITY_COMP_CONFIG.pos[1], GRAVITY_COMP_CONFIG.pos[2]);
+                    gcMesh.rotation.set(
+                        THREE.MathUtils.degToRad(GRAVITY_COMP_CONFIG.rot[0]),
+                        THREE.MathUtils.degToRad(GRAVITY_COMP_CONFIG.rot[1]),
+                        THREE.MathUtils.degToRad(GRAVITY_COMP_CONFIG.rot[2])
+                    );
+                    rotator.add(gcMesh);
+                }
             });
             topo.forEach(node => {
                 if (node.id === 1) modulesGroup.add(modules[1]);
