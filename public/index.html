@@ -103,9 +103,9 @@
             <div id="baseSettings" style="margin-top: 15px; border-top: 1px solid #45475a; padding-top: 10px;">
                 <strong>⚙️ 實體底座設定：</strong>
                 <select id="baseRotationSelect" style="background: #313244; color: #a6e3a1; border: 1px solid #585b70; border-radius: 4px; padding: 4px; font-weight: bold; width: 100%; margin-top: 5px;">
-                    <option value="0">0° (預設)</option>
+                    <option value="0">0°</option>
                     <option value="90">90° (逆時針)</option>
-                    <option value="180">180°</option>
+                    <option value="180" selected>180° (預設,實際手臂位置)</option>
                     <option value="-90">270° (順時針)</option>
                 </select>
             </div>
@@ -230,7 +230,7 @@
         // 場景X方向 <-> 顯示"+Y"(綠色) ; 場景Z方向(深度) <-> 顯示"+X"(粉紅) ; 場景Y方向(高度) <-> 顯示"+Z"(藍色)
         const arrowSceneX = new THREE.ArrowHelper(new THREE.Vector3(1,0,0), new THREE.Vector3(0,0,0), 100, 0xa6e3a1);
         const arrowSceneY = new THREE.ArrowHelper(new THREE.Vector3(0,1,0), new THREE.Vector3(0,0,0), 100, 0x89b4fa);
-        const arrowSceneZ = new THREE.ArrowHelper(new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,0), 100, 0xf38ba8);
+        const arrowSceneZ = new THREE.ArrowHelper(new THREE.Vector3(0,0,-1), new THREE.Vector3(0,0,0), 100, 0xf38ba8);
         scene.add(arrowSceneX, arrowSceneY, arrowSceneZ);
 
         function createAxisLabel(text, colorStr) {
@@ -630,6 +630,8 @@
                 modulesGroup.rotation.y = parseInt(e.target.value) * (Math.PI / 180);
                 e.target.blur();
             });
+            // 🌟 頁面載入時就直接套用選單目前的預設值(180度),不用等使用者手動再選一次
+            modulesGroup.rotation.y = parseInt(baseRotationSelect.value) * (Math.PI / 180);
         }
 
         const mSlider = document.getElementById('mobileSlider');
@@ -802,7 +804,7 @@
             arrowSceneZ.setLength(dynamicAxisLen, dynamicAxisLen*0.08, dynamicAxisLen*0.05);
             // 🌟 交換X、Y位置:場景X方向顯示"+Y"(綠),場景Z方向顯示"+X"(粉紅),場景Y(高度)顯示"+Z"(藍,不變)
             labelY.position.set(dynamicAxisLen + 15, 0, 0);
-            labelX.position.set(0, 0, dynamicAxisLen + 15);
+            labelX.position.set(0, 0, -(dynamicAxisLen + 15));
             labelZ.position.set(0, dynamicAxisLen + 15, 0);
 
             // 🌟 每10幀檢查一次碰撞(約6次/秒)
