@@ -155,12 +155,6 @@
 
         <hr style="border-color:#45475a; margin:12px 0;">
 
-        <div style="font-weight:bold; color:#f5c2e7; margin-bottom:6px;">⚙️ 重力補償機構校正</div>
-        <div style="color:#6c7086; font-size:11px; margin-bottom:8px;">拖動滑桿即時調整位置/角度,調到滿意後把數值告訴我定案</div>
-        <div id="gravityCompSliders"></div>
-
-        <hr style="border-color:#45475a; margin:12px 0;">
-
         <div style="border:1px solid #45475a; border-radius:8px; padding:10px;">
             <div style="font-weight:bold; color:#f38ba8; margin-bottom:4px;">⚠️ 自我碰撞檢測(膠囊體法,場景自己的比例)</div>
             <div style="color:#a6adc8; font-size:11px; margin-bottom:8px;">操作上面的關節滑桿,肉眼確認畫面上有沒有真的碰在一起,再用下面滑桿調整半徑,直到警示跟肉眼判斷一致</div>
@@ -389,7 +383,8 @@
         const CONNECTOR_CONFIG = DEFAULT_CONNECTOR_CONFIG;
 
         // 🌟 重力補償機構的位置/旋轉,純視覺呈現用,起始值需要之後依實際畫面微調
-        let GRAVITY_COMP_CONFIG = { pos: [-12, 34.5, 0], rot: [0, 180, 180] };
+        // 🌟 重力補償機構位置/旋轉已校正完成並鎖定,不再提供UI調整
+        const GRAVITY_COMP_CONFIG = { pos: [-12, 34.5, 0], rot: [0, 180, 180] };
 
         function connectorTypeForNode(nodeId) {
             if (nodeId === 2) return 'rod2';
@@ -956,21 +951,6 @@
             });
             manualJointInputs.push(inp);
         }
-
-        // 🌟 重力補償機構的位置/旋轉校正滑桿
-        const gravityCompContainer = document.getElementById('gravityCompSliders');
-        ['X','Y','Z'].forEach((axis, i) => {
-            makeSlider(gravityCompContainer, `位置 ${axis}`, -150, 150, 0.5, GRAVITY_COMP_CONFIG.pos[i], v => {
-                GRAVITY_COMP_CONFIG.pos[i] = v;
-                refreshScene();
-            });
-        });
-        ['X','Y','Z'].forEach((axis, i) => {
-            makeSlider(gravityCompContainer, `旋轉 ${axis}`, 0, 360, 1, GRAVITY_COMP_CONFIG.rot[i], v => {
-                GRAVITY_COMP_CONFIG.rot[i] = v;
-                refreshScene();
-            });
-        });
 
         // 🌟 六段連桿半徑調整滑桿(場景單位),對照肉眼判斷現場微調
         const collisionRadiusContainer = document.getElementById('collisionRadiusSliders');
