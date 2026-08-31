@@ -226,7 +226,12 @@
 
         const scene = new THREE.Scene();
         scene.add(new THREE.GridHelper(200, 50, 0x89b4fa, 0x313244));
-        const axesHelper = new THREE.AxesHelper(100); scene.add(axesHelper);
+        // 🌟 改用自訂箭頭取代內建AxesHelper,顏色直接對應文字標籤,並交換X、Y位置
+        // 場景X方向 <-> 顯示"+Y"(綠色) ; 場景Z方向(深度) <-> 顯示"+X"(粉紅) ; 場景Y方向(高度) <-> 顯示"+Z"(藍色)
+        const arrowSceneX = new THREE.ArrowHelper(new THREE.Vector3(1,0,0), new THREE.Vector3(0,0,0), 100, 0xa6e3a1);
+        const arrowSceneY = new THREE.ArrowHelper(new THREE.Vector3(0,1,0), new THREE.Vector3(0,0,0), 100, 0x89b4fa);
+        const arrowSceneZ = new THREE.ArrowHelper(new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,0), 100, 0xf38ba8);
+        scene.add(arrowSceneX, arrowSceneY, arrowSceneZ);
 
         function createAxisLabel(text, colorStr) {
             const canvas = document.createElement('canvas');
@@ -555,9 +560,6 @@
                 gripperMarkerAttached = true;
             }
             
-            // 🌟 改用足夠大的固定數值,原本的公式是沿用舊佔位模型算的,低估了真實連接件的實際長度,
-            // 導致座標軸比手臂本身還短,標籤才會看起來被手臂擋住、擠在原點附近
-            let maxAxisLen = 450;
             if (topo.length > 0) {
                 // 🌟 只有在"沒有夾爪"的情況下才用這個舊的寫死偏移量,
                 // 夾爪存在時,標記點已經在上面正確掛在真實的gMesh上了,不要在這裡蓋回去
@@ -567,8 +569,7 @@
                     modules[lastNodeId].userData.rotator.add(endEffectorMarker);
                 }
             }
-            axesHelper.scale.set(maxAxisLen / 100, maxAxisLen / 100, maxAxisLen / 100);
-            labelX.position.set(maxAxisLen + 15, 0, 0); labelZ.position.set(0, maxAxisLen + 15, 0); labelY.position.set(0, 0, maxAxisLen + 15);
+            // 🌟 座標軸長度改到animate()裡動態計算,這裡不再處理
 
             selectModule(selectedNodeId);
         }
@@ -792,6 +793,17 @@
             } else {
                 document.getElementById('xyzDisplay').innerHTML = `X: 0.0 <br>Y: 0.0 <br>Z: 0.0`;
             }
+
+            // 🌟 座標軸長度動態跟著手臂目前實際延伸的距離變化,不用固定數字也不用低估的舊公式
+            const currentReach = latestTopology.length > 0 ? worldVec.length() : 100;
+            const dynamicAxisLen = Math.max(120, currentReach * 1.2);
+            arrowSceneX.setLength(dynamicAxisLen, dynamicAxisLen*0.08, dynamicAxisLen*0.05);
+            arrowSceneY.setLength(dynamicAxisLen, dynamicAxisLen*0.08, dynamicAxisLen*0.05);
+            arrowSceneZ.setLength(dynamicAxisLen, dynamicAxisLen*0.08, dynamicAxisLen*0.05);
+            // 🌟 交換X、Y位置:場景X方向顯示"+Y"(綠),場景Z方向顯示"+X"(粉紅),場景Y(高度)顯示"+Z"(藍,不變)
+            labelY.position.set(dynamicAxisLen + 15, 0, 0);
+            labelX.position.set(0, 0, dynamicAxisLen + 15);
+            labelZ.position.set(0, dynamicAxisLen + 15, 0);
 
             // 🌟 每10幀檢查一次碰撞(約6次/秒)
             collisionFrameCounter++;
