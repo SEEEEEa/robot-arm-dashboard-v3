@@ -778,6 +778,10 @@
             return { collided: details.length > 0, details };
         }
 
+        let lastIkThetas = [0, 0, 0, 0, 0]; // 🌟 提前宣告,因為animate()第一次執行時就需要用到
+        // 🌟 座標原點平移:我們的IK數學模型,原點(Z=0)是定義在底座圓柱頂端(馬達1掛載點),
+        // 這個位置其實是真實世界裡Z=215mm的高度(底座圓柱本身的高度)。同樣提前宣告給animate()用。
+        const Z_GROUND_OFFSET = 215;
         let worldVec = new THREE.Vector3();
         let collisionFrameCounter = 0;
         function animate() {
@@ -787,11 +791,11 @@
                 modules[id].userData.rotator.rotation.y += (target - modules[id].userData.rotator.rotation.y) * 0.15;
             }
             if (latestTopology.length > 0) {
-                // 🌟 修復 3：從最後一顆積木頂端的 Marker 提取真實末端座標！
-                endEffectorMarker.getWorldPosition(worldVec);
-                // 🌟 這裡把場景原生的Y(高度)顯示成Z、Z(深度)顯示成Y,
-                // 對應我們IK數學模型的慣例(Z=高度,XY=水平面),這樣輸入輸出的座標語意才會一致
-                document.getElementById('xyzDisplay').innerHTML = `X(水平): ${(worldVec.x*2).toFixed(1)} <br>Y(水平): ${(worldVec.z*2).toFixed(1)} <br>Z(高度⬆): ${(worldVec.y*2).toFixed(1)}`;
+                // 🌟 改用正向運動學(真實毫米數的數學模型)計算目前角度對應的末端座標,
+                // 不再讀取3D場景本身的世界座標(場景比例跟真實毫米數字有落差,算出來的會不準)
+                const fkResult = ikForwardKinematics(...lastIkThetas);
+                const fkPos = fkResult.pos; // [X, Y, Z], Z是相對於馬達1掛載點的高度
+                document.getElementById('xyzDisplay').innerHTML = `X(水平): ${fkPos[0].toFixed(1)} <br>Y(水平): ${fkPos[1].toFixed(1)} <br>Z(高度⬆): ${(fkPos[2] + Z_GROUND_OFFSET).toFixed(1)}`;
             } else {
                 document.getElementById('xyzDisplay').innerHTML = `X: 0.0 <br>Y: 0.0 <br>Z: 0.0`;
             }
@@ -1013,7 +1017,7 @@
         }
 
         // 🌟 記錄"目前姿態"(真實角度,非視覺修正過的),供下一次求解優先熱啟動使用
-        let lastIkThetas = [0, 0, 0, 0, 0];
+        // (宣告已移到animate()呼叫之前,這裡不再重複宣告)
 
         function ikRunSingleAttempt(init, targetVec, h, posOnly) {
             const outDim = targetVec.length; // 🌟 3(僅位置) 或 6(位置+方向),動態決定
@@ -1185,11 +1189,7 @@
         modePosDirBtn.addEventListener('click', () => setIkMode(false));
         setIkMode(true); // 🌟 預設用"僅位置"模式,比較不容易求解失敗
 
-        // 🌟 座標原點平移:我們的IK數學模型,原點(Z=0)是定義在底座圓柱頂端(馬達1掛載點),
-        // 這個位置其實是真實世界裡Z=215mm的高度(底座圓柱本身的高度)。
-        // 為了讓使用者輸入座標時,可以直接用"真實地板"當作Z=0的基準(比較直覺),
-        // 這裡做一個單純的數值平移:使用者輸入的Z,內部求解前先減去這個值,不動任何IK運算邏輯本身。
-        const Z_GROUND_OFFSET = 215;
+        // (Z_GROUND_OFFSET 宣告已提前到animate()呼叫之前,這裡不再重複宣告)
 
         document.getElementById('ikSolveBtn').addEventListener('click', () => {
             if (latestTopology.length === 0) { latestTopology = MOCK_TOPOLOGY; rebuildTopology(MOCK_TOPOLOGY); }
