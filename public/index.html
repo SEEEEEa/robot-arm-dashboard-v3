@@ -389,7 +389,7 @@
         const CONNECTOR_CONFIG = DEFAULT_CONNECTOR_CONFIG;
 
         // 🌟 重力補償機構的位置/旋轉,純視覺呈現用,起始值需要之後依實際畫面微調
-        let GRAVITY_COMP_CONFIG = { pos: [0, 0, 0], rot: [0, 0, 180] };
+        let GRAVITY_COMP_CONFIG = { pos: [-12, 34.5, 0], rot: [0, 180, 180] };
 
         function connectorTypeForNode(nodeId) {
             if (nodeId === 2) return 'rod2';
