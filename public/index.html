@@ -567,8 +567,8 @@
                     modules[lastNodeId].userData.rotator.add(endEffectorMarker);
                 }
             }
-            axesHelper.scale.set(1, maxAxisLen / 100, 1);
-            labelX.position.set(110, 0, 0); labelY.position.set(0, maxAxisLen + 5, 0); labelZ.position.set(0, 0, 110);
+            axesHelper.scale.set(maxAxisLen / 100, maxAxisLen / 100, maxAxisLen / 100);
+            labelX.position.set(maxAxisLen + 15, 0, 0); labelZ.position.set(0, maxAxisLen + 15, 0); labelY.position.set(0, 0, maxAxisLen + 15);
 
             selectModule(selectedNodeId);
         }
