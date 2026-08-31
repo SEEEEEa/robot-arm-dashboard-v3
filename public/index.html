@@ -555,10 +555,10 @@
                 gripperMarkerAttached = true;
             }
             
-            let maxAxisLen = 100;
+            // 🌟 改用足夠大的固定數值,原本的公式是沿用舊佔位模型算的,低估了真實連接件的實際長度,
+            // 導致座標軸比手臂本身還短,標籤才會看起來被手臂擋住、擠在原點附近
+            let maxAxisLen = 450;
             if (topo.length > 0) {
-                maxAxisLen = Math.max(100, topo.length * 44.5 + 22.5);
-
                 // 🌟 只有在"沒有夾爪"的情況下才用這個舊的寫死偏移量,
                 // 夾爪存在時,標記點已經在上面正確掛在真實的gMesh上了,不要在這裡蓋回去
                 if (!gripperMarkerAttached) {
