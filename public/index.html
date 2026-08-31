@@ -176,7 +176,7 @@
         <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; margin-bottom:8px;">
             <div><label style="font-size:11px; color:#a6adc8;">X (水平)</label><input id="ikX" type="number" value="300" style="width:100%; background:#313244; color:#a6e3a1; border:1px solid #585b70; border-radius:4px; padding:4px;"></div>
             <div><label style="font-size:11px; color:#a6adc8;">Y (水平)</label><input id="ikY" type="number" value="0" style="width:100%; background:#313244; color:#a6e3a1; border:1px solid #585b70; border-radius:4px; padding:4px;"></div>
-            <div><label style="font-size:11px; color:#a6adc8;">Z (高度⬆)</label><input id="ikZ" type="number" value="300" style="width:100%; background:#313244; color:#a6e3a1; border:1px solid #585b70; border-radius:4px; padding:4px;"></div>
+            <div><label style="font-size:11px; color:#a6adc8;">Z (離地高度⬆)</label><input id="ikZ" type="number" value="300" style="width:100%; background:#313244; color:#a6e3a1; border:1px solid #585b70; border-radius:4px; padding:4px;"></div>
         </div>
         <div id="ikDirWrapper">
             <div id="ikDirSliders"></div>
@@ -1171,12 +1171,19 @@
         modePosDirBtn.addEventListener('click', () => setIkMode(false));
         setIkMode(true); // 🌟 預設用"僅位置"模式,比較不容易求解失敗
 
+        // 🌟 座標原點平移:我們的IK數學模型,原點(Z=0)是定義在底座圓柱頂端(馬達1掛載點),
+        // 這個位置其實是真實世界裡Z=215mm的高度(底座圓柱本身的高度)。
+        // 為了讓使用者輸入座標時,可以直接用"真實地板"當作Z=0的基準(比較直覺),
+        // 這裡做一個單純的數值平移:使用者輸入的Z,內部求解前先減去這個值,不動任何IK運算邏輯本身。
+        const Z_GROUND_OFFSET = 215;
+
         document.getElementById('ikSolveBtn').addEventListener('click', () => {
             if (latestTopology.length === 0) { latestTopology = MOCK_TOPOLOGY; rebuildTopology(MOCK_TOPOLOGY); }
 
             const x = parseFloat(document.getElementById('ikX').value);
             const y = parseFloat(document.getElementById('ikY').value);
-            const z = parseFloat(document.getElementById('ikZ').value);
+            const zInput = parseFloat(document.getElementById('ikZ').value); // 🌟 使用者輸入的Z,是以真實地板為基準
+            const z = zInput - Z_GROUND_OFFSET; // 🌟 轉換成IK內部使用的Z(以馬達1掛載點為基準),再送進去求解
 
             let dir = null; // 🌟 僅位置模式時,dir維持null,內部會自動切換成3維(只看位置)求解
             if (!ikPosOnlyMode) {
