@@ -818,7 +818,11 @@
         function animate() {
             requestAnimationFrame(animate); controls.update();
             for (let id in serverAngles) if (modules[id]) {
-                const target = (serverAngles[id] - 500) * (240 / 1000) * (Math.PI / 180);
+                // 🌟 serverAngles統一存放"真實角度"(不管從滑桿還是IK來的),
+                // 視覺方向修正集中在這裡套用,不再分散寫在好幾個地方,避免遺漏或不一致
+                const trueDeg = servoPosToDeg(serverAngles[id]);
+                const visualDeg = trueDeg * (VISUAL_SIGN[id-1] || 1);
+                const target = (visualDeg) * (Math.PI / 180);
                 modules[id].userData.rotator.rotation.y += (target - modules[id].userData.rotator.rotation.y) * 0.15;
             }
             if (latestTopology.length > 0) {
@@ -941,12 +945,12 @@
         function servoPosToDeg(pos) { return (pos - 500) * 0.24; }
 
         // 🌟 手動關節角度測試:直接設定serverAngles,繞過IK,方便驗證單一關節實際轉動方向
-        // (已套用VISUAL_SIGN修正,所以現在每條滑桿的正值,應該都對應同一種"往前彎"的視覺方向)
+        // (serverAngles統一存"真實角度",視覺方向修正集中在animate()裡處理,這裡不用再乘VISUAL_SIGN)
         const manualJointContainer = document.getElementById('manualJointSliders');
         const manualJointInputs = []; // 存起來,方便IK求解完同步更新這幾條滑桿的顯示
         for (let id = 1; id <= 5; id++) {
             const inp = makeSlider(manualJointContainer, `馬達${id} (度)`, -120, 120, 1, 0, deg => {
-                serverAngles[id] = degToServoPos(deg * VISUAL_SIGN[id-1]);
+                serverAngles[id] = degToServoPos(deg);
                 lastIkThetas[id-1] = deg; // 🌟 手動調整也算數,讓下次IK求解從這裡熱啟動
             });
             manualJointInputs.push(inp);
@@ -1246,10 +1250,10 @@
             }
 
             // 套用找到的最佳解(不管有沒有碰撞,都先讓畫面呈現這個姿態,方便你直接看到問題)
+            // 🌟 serverAngles統一存"真實角度",滑桿顯示也用真實角度,視覺方向修正集中在animate()處理
             for (let i = 0; i < 5; i++) {
-                const visualDeg = result.thetas[i] * VISUAL_SIGN[i];
-                serverAngles[i+1] = degToServoPos(visualDeg);
-                manualJointInputs[i].setDisplayValue(visualDeg);
+                serverAngles[i+1] = degToServoPos(result.thetas[i]);
+                manualJointInputs[i].setDisplayValue(result.thetas[i]);
             }
             lastIkThetas = [...result.thetas];
 
