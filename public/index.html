@@ -810,6 +810,8 @@
         }
 
         let lastIkThetas = [0, 0, 0, 0, 0]; // 🌟 提前宣告,因為animate()第一次執行時就需要用到
+        let lastIkTargetPos = null; // 🌟 記錄上一次IK的目標座標,用來判斷這次目標移動了多遠
+        const WARM_START_MAX_DIST = 10; // 🌟 目標移動距離在這個範圍內,才嘗試熱啟動;超過就直接正常搜尋
         // 🌟 座標原點平移:我們的IK數學模型,原點(Z=0)是定義在底座圓柱頂端(馬達1掛載點),
         // 這個位置其實是真實世界裡Z=215mm的高度(底座圓柱本身的高度)。同樣提前宣告給animate()用。
         const Z_GROUND_OFFSET = 215;
@@ -1146,31 +1148,41 @@
             return c;
         }
 
-        // 🌟 結合IK跟碰撞檢查,並且保留"熱啟動優先"的連續性:
-        // 1. 先只試熱啟動(延續上次姿態),如果可行又沒碰撞,直接採用,不去比較其他起始點的誤差大小
-        // 2. 只有熱啟動失敗(不可行,或會碰撞),才擴大搜尋其他5組起始點,在裡面找"有解又不碰撞"的
-        // 3. 都找不到才退而求其次找"有解但會碰撞"的,全部都沒有才是"完全無法到達"
+        // 🌟 結合IK跟碰撞檢查,並且保留"熱啟動優先"的連續性,但加上距離判斷閘門:
+        // 1. 先檢查這次目標跟上次目標,XYZ距離是否在WARM_START_MAX_DIST以內
+        //    在範圍內才嘗試熱啟動(延續上次姿態);超過範圍代表目標整個換了,直接跳過熱啟動、正常搜尋
+        // 2. 熱啟動可行又沒碰撞,直接採用,不去比較其他起始點的誤差大小
+        // 3. 熱啟動失敗(不可行、會碰撞、或距離太遠被跳過),才擴大搜尋其他5組起始點,找"有解又不碰撞"的
+        // 4. 都找不到才退而求其次找"有解但會碰撞"的,全部都沒有才是"完全無法到達"
         function ikSolveAvoidingCollision(targetPos, targetDir) {
             const { targetVec, posOnly } = buildIkTargetVec(targetPos, targetDir);
             const h = 0.05;
 
-            // 🌟 第一步:只試熱啟動,不浪費運算去跑其他5組
-            const warm = ikRunSingleAttempt(lastIkThetas, targetVec, h, posOnly);
-            warm.warmStarted = true;
+            // 🌟 判斷這次目標離上次目標多遠,決定要不要嘗試熱啟動
+            const distFromLastTarget = lastIkTargetPos
+                ? Math.hypot(targetPos[0]-lastIkTargetPos[0], targetPos[1]-lastIkTargetPos[1], targetPos[2]-lastIkTargetPos[2])
+                : Infinity; // 第一次求解,沒有"上次目標"可比較,視為距離無限大,跳過熱啟動
 
-            if (warm.feasible) {
-                checkCandidateCollision(warm);
-                if (!warm.collided) {
-                    return { status: 'success', result: warm }; // 🌟 熱啟動成功又不碰撞,直接採用,保持連續性
+            let warm = null;
+            if (distFromLastTarget <= WARM_START_MAX_DIST) {
+                warm = ikRunSingleAttempt(lastIkThetas, targetVec, h, posOnly);
+                warm.warmStarted = true;
+
+                if (warm.feasible) {
+                    checkCandidateCollision(warm);
+                    if (!warm.collided) {
+                        lastIkTargetPos = [...targetPos];
+                        return { status: 'success', result: warm }; // 🌟 熱啟動成功又不碰撞,直接採用,保持連續性
+                    }
                 }
             }
 
-            // 熱啟動不可行、或會碰撞,才擴大搜尋其他5組起始點
+            // 熱啟動被跳過(距離太遠)、不可行、或會碰撞,才擴大搜尋其他5組起始點
             const restarts = [
                 [0,0,0,0,0], [30,-30,30,0,-30], [-30,40,-40,20,30], [10,-60,60,-10,-20], [0,60,-60,0,40],
             ];
             const otherCandidates = restarts.map(init => ikRunSingleAttempt(init, targetVec, h, posOnly));
-            const allCandidates = warm.feasible ? [warm, ...otherCandidates] : otherCandidates;
+            const allCandidates = (warm && warm.feasible) ? [warm, ...otherCandidates] : otherCandidates;
 
             let bestCollisionFree = null;
             let bestFeasibleAny = null;
@@ -1185,6 +1197,8 @@
                     bestCollisionFree = c;
                 }
             }
+
+            lastIkTargetPos = [...targetPos]; // 🌟 不管結果如何,記錄這次的目標,供下次比較距離用
 
             if (bestCollisionFree) return { status: 'success', result: bestCollisionFree };
             if (bestFeasibleAny) return { status: 'collision', result: bestFeasibleAny };
