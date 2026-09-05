@@ -1111,16 +1111,17 @@
         }
 
         // 🌟 蒐集所有候選解(熱啟動+5組多起點),不是只挑一個就回傳,方便外層逐一檢查碰撞
-        function ikSolveAllCandidates(targetPos, targetDir) {
+        function buildIkTargetVec(targetPos, targetDir) {
             const posOnly = !targetDir;
-            let targetVec;
-            if (posOnly) {
-                targetVec = [targetPos[0], targetPos[1], targetPos[2]];
-            } else {
-                const dl = Math.hypot(targetDir[0], targetDir[1], targetDir[2]) || 1;
-                targetVec = [targetPos[0], targetPos[1], targetPos[2],
-                    (targetDir[0]/dl)*IK_ORIENT_WEIGHT, (targetDir[1]/dl)*IK_ORIENT_WEIGHT, (targetDir[2]/dl)*IK_ORIENT_WEIGHT];
-            }
+            if (posOnly) return { targetVec: [targetPos[0], targetPos[1], targetPos[2]], posOnly };
+            const dl = Math.hypot(targetDir[0], targetDir[1], targetDir[2]) || 1;
+            const targetVec = [targetPos[0], targetPos[1], targetPos[2],
+                (targetDir[0]/dl)*IK_ORIENT_WEIGHT, (targetDir[1]/dl)*IK_ORIENT_WEIGHT, (targetDir[2]/dl)*IK_ORIENT_WEIGHT];
+            return { targetVec, posOnly };
+        }
+
+        function ikSolveAllCandidates(targetPos, targetDir) {
+            const { targetVec, posOnly } = buildIkTargetVec(targetPos, targetDir);
             const h = 0.05;
             const candidates = [];
 
@@ -1137,22 +1138,48 @@
             return candidates;
         }
 
-        // 🌟 結合IK跟碰撞檢查:在所有候選解裡,優先找"有解又不會碰撞"的,
-        // 找不到才退而求其次找"有解但會碰撞"的,兩者都沒有才是"完全無法到達"
+        function checkCandidateCollision(c) {
+            poseSceneInstantly(c.thetas);
+            const collResult = checkSelfCollisionWeb();
+            c.collided = collResult.collided;
+            c.collisionDetails = collResult.details;
+            return c;
+        }
+
+        // 🌟 結合IK跟碰撞檢查,並且保留"熱啟動優先"的連續性:
+        // 1. 先只試熱啟動(延續上次姿態),如果可行又沒碰撞,直接採用,不去比較其他起始點的誤差大小
+        // 2. 只有熱啟動失敗(不可行,或會碰撞),才擴大搜尋其他5組起始點,在裡面找"有解又不碰撞"的
+        // 3. 都找不到才退而求其次找"有解但會碰撞"的,全部都沒有才是"完全無法到達"
         function ikSolveAvoidingCollision(targetPos, targetDir) {
-            const candidates = ikSolveAllCandidates(targetPos, targetDir);
+            const { targetVec, posOnly } = buildIkTargetVec(targetPos, targetDir);
+            const h = 0.05;
+
+            // 🌟 第一步:只試熱啟動,不浪費運算去跑其他5組
+            const warm = ikRunSingleAttempt(lastIkThetas, targetVec, h, posOnly);
+            warm.warmStarted = true;
+
+            if (warm.feasible) {
+                checkCandidateCollision(warm);
+                if (!warm.collided) {
+                    return { status: 'success', result: warm }; // 🌟 熱啟動成功又不碰撞,直接採用,保持連續性
+                }
+            }
+
+            // 熱啟動不可行、或會碰撞,才擴大搜尋其他5組起始點
+            const restarts = [
+                [0,0,0,0,0], [30,-30,30,0,-30], [-30,40,-40,20,30], [10,-60,60,-10,-20], [0,60,-60,0,40],
+            ];
+            const otherCandidates = restarts.map(init => ikRunSingleAttempt(init, targetVec, h, posOnly));
+            const allCandidates = warm.feasible ? [warm, ...otherCandidates] : otherCandidates;
 
             let bestCollisionFree = null;
             let bestFeasibleAny = null;
 
-            for (const c of candidates) {
+            for (const c of allCandidates) {
                 if (!c.feasible) continue;
                 if (!bestFeasibleAny || c.errNorm < bestFeasibleAny.errNorm) bestFeasibleAny = c;
 
-                poseSceneInstantly(c.thetas);
-                const collResult = checkSelfCollisionWeb();
-                c.collided = collResult.collided;
-                c.collisionDetails = collResult.details;
+                if (c.collided === undefined) checkCandidateCollision(c);
 
                 if (!c.collided && (!bestCollisionFree || c.errNorm < bestCollisionFree.errNorm)) {
                     bestCollisionFree = c;
