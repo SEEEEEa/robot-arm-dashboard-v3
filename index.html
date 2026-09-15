@@ -405,13 +405,27 @@
         const ws = new WebSocket("wss://robot-arm-dashboard-v3.onrender.com");
 
         // 🌟 新增 1：當網頁成功連上 Render 伺服器時
+        let hasReceivedRealStatus = false; // 🌟 追蹤有沒有真的收到過S3的狀態回應
+        let statusPollTimer = null;
+
         ws.onopen = () => {
             document.getElementById('statusBadge').innerText = "伺服器已連線 (等待S3)";
             document.getElementById('statusBadge').className = "status-badge status-READY";
             document.getElementById('errorMsg').innerText = ""; // 清除錯誤訊息
-            // 🌟 主動要一次目前狀態,不要被動等S3"狀態改變"才更新
-            // (如果S3早就連好、狀態已經穩定不變,不主動問的話,網頁會永遠卡在初始畫面)
-            ws.send(JSON.stringify({ cmd: 'STATUS' }));
+
+            // 🌟 改成持續輪詢:每2秒問一次,直到真的收到S3回應為止,
+            // 避免"剛連上那一刻S3還沒連好"這種時間差,問了也白問的問題
+            hasReceivedRealStatus = false;
+            if (statusPollTimer) clearInterval(statusPollTimer);
+            ws.send(JSON.stringify({ cmd: 'STATUS' })); // 先問一次
+            statusPollTimer = setInterval(() => {
+                if (hasReceivedRealStatus) {
+                    clearInterval(statusPollTimer);
+                    statusPollTimer = null;
+                    return;
+                }
+                if (ws.readyState === 1) ws.send(JSON.stringify({ cmd: 'STATUS' }));
+            }, 2000);
         };
 
         // 🌟 新增 2：當網頁與伺服器斷線時 (可能是 Render 休眠，或是你沒網路)
@@ -434,22 +448,24 @@
             s3Watchdog = setTimeout(() => {
                 document.getElementById('statusBadge').innerText = "S3 主板已離線";
                 document.getElementById('statusBadge').className = "status-badge status-ERROR";
-            }, 2000); // 只要 2 秒沒收到 S3 的廣播，就判定斷線！
+            }, 5000); // 🌟 從2秒放寬到5秒:搭配S3端每1.5秒的定期廣播,留足安全餘裕,避免單純網路小延遲就誤判離線
         }
 
         ws.onmessage = e => {
     const data = JSON.parse(e.data);
     
+    if (data.status) hasReceivedRealStatus = true; // 🌟 收到真實狀態了,輪詢可以停了
     if(data.status) resetS3Watchdog(); 
     
     if (data.status === "WORKING") {
         latestTopology = data.topology || [];
         latestTopology.forEach(n => serverAngles[n.id] = n.angle);
-        
-        const newTopoStr = latestTopology.map(n => `${n.id}-${n.face}`).join('|');
-        if (newTopoStr !== currentTopologyStr) {
-            rebuildTopology(latestTopology);
-            currentTopologyStr = newTopoStr;
+
+        // 🌟 修正:不再根據"實際接了幾顆馬達"動態重建場景結構
+        // 畫面永遠維持完整的手臂姿態(用MOCK_TOPOLOGY建立),真實資料只拿來更新角度,不拿來決定"顯示幾顆"
+        if (!currentTopologyStr) {
+            rebuildTopology(MOCK_TOPOLOGY);
+            currentTopologyStr = "fixed-full-arm"; // 🌟 只建立一次,之後不再因為真實拓樸變化而重建
         }
 
         // 🌟 核心修復 1：當系統「剛結束拓樸」進入 WORKING 狀態時，強制將虛擬滑桿對齊真實角度！
