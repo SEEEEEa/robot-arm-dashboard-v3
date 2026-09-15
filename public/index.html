@@ -306,10 +306,10 @@
             baseMesh = new THREE.Mesh(g, new THREE.MeshPhongMaterial({ color: 0xf5c2e7 }));
             baseMesh.position.y = -g.boundingBox.min.y; addBlackEdges(baseMesh); globalBaseGroup.add(baseMesh);
             modulesGroup.position.y = totalHeight; // 🌟 馬達1會自動疊在圓柱頂端,不管底座多高都對
-            rebuildTopology(latestTopology);
+            rebuildTopology(MOCK_TOPOLOGY);
         });
-        stlLoader.load('./pivot.stl', g => { g.rotateY(Math.PI); g.scale(0.5, 0.5, 0.5); pivotStlGeometry = g; rebuildTopology(latestTopology); });
-        stlLoader.load('./body.stl', g => { g.rotateY(Math.PI); g.scale(0.5, 0.5, 0.5); bodyStlGeometry = g; rebuildTopology(latestTopology); });
+        stlLoader.load('./pivot.stl', g => { g.rotateY(Math.PI); g.scale(0.5, 0.5, 0.5); pivotStlGeometry = g; rebuildTopology(MOCK_TOPOLOGY); });
+        stlLoader.load('./body.stl', g => { g.rotateY(Math.PI); g.scale(0.5, 0.5, 0.5); bodyStlGeometry = g; rebuildTopology(MOCK_TOPOLOGY); });
 
         // 🌟 新增:短轉接頭(取代原本的pivot.stl,用在馬達1-2、3-4、4-5之間)
         // translate 是把量測到的"起點端中心"平移到原點(0,0,0),方便後續定位
@@ -319,7 +319,7 @@
             g.scale(0.5, 0.5, 0.5);
             g.computeBoundingBox();
             shortConnectorGeometry = g;
-            rebuildTopology(latestTopology);
+            rebuildTopology(MOCK_TOPOLOGY);
         });
 
         // 🌟 新增:延長桿2(只用在馬達2-3之間,L形彎折)
@@ -328,7 +328,7 @@
             g.scale(0.5, 0.5, 0.5);
             g.computeBoundingBox();
             rod2Geometry = g;
-            rebuildTopology(latestTopology);
+            rebuildTopology(MOCK_TOPOLOGY);
         });
 
         // 🌟 新增:延長桿(只用在馬達5-夾爪之間,L形彎折)
@@ -337,7 +337,7 @@
             g.scale(0.5, 0.5, 0.5);
             g.computeBoundingBox();
             rodGeometry = g;
-            rebuildTopology(latestTopology);
+            rebuildTopology(MOCK_TOPOLOGY);
         });
 
         let gripperGeometry;
@@ -348,7 +348,7 @@
             g.scale(0.5, 0.5, 0.5);
             g.computeBoundingBox();
             gripperGeometry = g;
-            rebuildTopology(latestTopology);
+            rebuildTopology(MOCK_TOPOLOGY);
         });
 
         let gravityCompGeometry;
@@ -361,7 +361,7 @@
             g.scale(0.5, 0.5, 0.5);
             g.computeBoundingBox();
             gravityCompGeometry = g;
-            rebuildTopology(latestTopology);
+            rebuildTopology(MOCK_TOPOLOGY);
         });
 
         // 🌟 依照節點ID,決定這個位置該額外插入哪個連接件模型
@@ -460,11 +460,12 @@
     if (data.status === "WORKING") {
         latestTopology = data.topology || [];
         latestTopology.forEach(n => serverAngles[n.id] = n.angle);
-        
-        const newTopoStr = latestTopology.map(n => `${n.id}-${n.face}`).join('|');
-        if (newTopoStr !== currentTopologyStr) {
-            rebuildTopology(latestTopology);
-            currentTopologyStr = newTopoStr;
+
+        // 🌟 修正:不再根據"實際接了幾顆馬達"動態重建場景結構
+        // 畫面永遠維持完整的手臂姿態(用MOCK_TOPOLOGY建立),真實資料只拿來更新角度,不拿來決定"顯示幾顆"
+        if (!currentTopologyStr) {
+            rebuildTopology(MOCK_TOPOLOGY);
+            currentTopologyStr = "fixed-full-arm"; // 🌟 只建立一次,之後不再因為真實拓樸變化而重建
         }
 
         // 🌟 核心修復 1：當系統「剛結束拓樸」進入 WORKING 狀態時，強制將虛擬滑桿對齊真實角度！
@@ -974,8 +975,7 @@
         }
 
         function refreshScene() {
-            const topo = latestTopology.length > 0 ? latestTopology : MOCK_TOPOLOGY;
-            rebuildTopology(topo);
+            rebuildTopology(MOCK_TOPOLOGY);
         }
 
         document.getElementById('debugLoadMock').addEventListener('click', () => {
