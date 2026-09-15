@@ -141,7 +141,7 @@
         <div style="border:2px solid #f38ba8; border-radius:8px; padding:10px; margin-bottom:12px;">
             <div style="font-weight:bold; color:#f38ba8; margin-bottom:6px;">🔓 實體硬體解鎖控制</div>
             <div style="color:#a6adc8; font-size:11px; margin-bottom:8px;">按下後會讓馬達真正通電、跑歸零程序。之後畫面上的動作(IK求解成功/手動滑桿)才會真的送給實體馬達。</div>
-            <button id="webUnlockBtn" style="width:100%; background:#f38ba8; color:#111; border:none; border-radius:6px; padding:8px; cursor:pointer; font-weight:bold; font-size:13px;">解鎖(讓實體馬達通電)</button>
+            <button id="webUnlockBtn" disabled style="width:100%; background:#f38ba8; color:#111; border:none; border-radius:6px; padding:8px; cursor:not-allowed; opacity:0.4; font-weight:bold; font-size:13px;">解鎖(讓實體馬達通電)</button>
             <div id="hardwareArmStatus" style="margin-top:6px; font-size:12px; color:#6c7086;">尚未解鎖,目前只有畫面模擬,不會真的動馬達</div>
         </div>
 
@@ -469,6 +469,15 @@
     document.getElementById('statusBadge').innerText = data.status;
     document.getElementById('statusBadge').className = `status-badge status-${data.status}`;
 
+    // 🌟 解鎖按鈕:只有S3實際回報"READY"(拓樸掃描完成、安全、等待解鎖)時才能按
+    // 不能只看ws.readyState,那個只代表"網頁有沒有連上雲端轉發站",不代表S3本身真的有連線
+    const unlockBtn = document.getElementById('webUnlockBtn');
+    if (unlockBtn) {
+        unlockBtn.disabled = (data.status !== "READY");
+        unlockBtn.style.opacity = (data.status !== "READY") ? "0.4" : "1";
+        unlockBtn.style.cursor = (data.status !== "READY") ? "not-allowed" : "pointer";
+    }
+
     // 🌟 更新硬體解鎖狀態顯示(不管是網頁還是實體搖桿解鎖的,S3回報WORKING就代表已解鎖)
     isHardwareArmed = (data.status === "WORKING");
     const armStatusEl = document.getElementById('hardwareArmStatus');
@@ -477,8 +486,10 @@
             armStatusEl.innerHTML = '<span style="color:#a6e3a1; font-weight:bold;">✅ 已解鎖,馬達會真的跟著動</span>';
         } else if (data.status === "HOMING") {
             armStatusEl.innerHTML = '<span style="color:#f9e2af;">⏳ 歸零程序進行中...</span>';
+        } else if (data.status === "READY") {
+            armStatusEl.innerHTML = '硬體已連線,可以按上方按鈕解鎖';
         } else {
-            armStatusEl.innerHTML = '尚未解鎖,目前只有畫面模擬,不會真的動馬達';
+            armStatusEl.innerHTML = `尚未連上S3主機(目前狀態:${data.status || '未知'}),無法解鎖`;
         }
     }
 
