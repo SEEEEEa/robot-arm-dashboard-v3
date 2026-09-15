@@ -138,6 +138,15 @@
             <button id="debugLoadMock" style="font-size:11px; background:#89b4fa; color:#111; border:none; border-radius:6px; padding:4px 8px; cursor:pointer;">載入測試拓樸</button>
         </div>
 
+        <div style="border:2px solid #f38ba8; border-radius:8px; padding:10px; margin-bottom:12px;">
+            <div style="font-weight:bold; color:#f38ba8; margin-bottom:6px;">🔓 實體硬體解鎖控制</div>
+            <div style="color:#a6adc8; font-size:11px; margin-bottom:8px;">按下後會讓馬達真正通電、跑歸零程序。之後畫面上的動作(IK求解成功/手動滑桿)才會真的送給實體馬達。</div>
+            <button id="webUnlockBtn" style="width:100%; background:#f38ba8; color:#111; border:none; border-radius:6px; padding:8px; cursor:pointer; font-weight:bold; font-size:13px;">解鎖(讓實體馬達通電)</button>
+            <div id="hardwareArmStatus" style="margin-top:6px; font-size:12px; color:#6c7086;">尚未解鎖,目前只有畫面模擬,不會真的動馬達</div>
+        </div>
+
+        <hr style="border-color:#45475a; margin:12px 0;">
+
         <label style="display:block; margin-bottom:4px; color:#a6adc8;">顯示到第幾層</label>
         <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
             <button id="debugLayerMinus" style="flex:0 0 auto; background:#585b70; color:#cdd6f4; border:none; border-radius:6px; width:32px; height:32px; cursor:pointer; font-size:16px;">−</button>
@@ -459,6 +468,19 @@
     document.getElementById('totalCount').innerText = data.total || 0;
     document.getElementById('statusBadge').innerText = data.status;
     document.getElementById('statusBadge').className = `status-badge status-${data.status}`;
+
+    // 🌟 更新硬體解鎖狀態顯示(不管是網頁還是實體搖桿解鎖的,S3回報WORKING就代表已解鎖)
+    isHardwareArmed = (data.status === "WORKING");
+    const armStatusEl = document.getElementById('hardwareArmStatus');
+    if (armStatusEl) {
+        if (isHardwareArmed) {
+            armStatusEl.innerHTML = '<span style="color:#a6e3a1; font-weight:bold;">✅ 已解鎖,馬達會真的跟著動</span>';
+        } else if (data.status === "HOMING") {
+            armStatusEl.innerHTML = '<span style="color:#f9e2af;">⏳ 歸零程序進行中...</span>';
+        } else {
+            armStatusEl.innerHTML = '尚未解鎖,目前只有畫面模擬,不會真的動馬達';
+        }
+    }
 
     // 🌟 核心修復 2：在拓樸掃描 (非 WORKING) 期間，禁用滑桿以防手賤亂改！
     const mSlider = document.getElementById('mobileSlider');
@@ -937,7 +959,30 @@
         // 實際測試發現馬達2跟馬達3套用同樣角度時,畫面呈現的彎曲方向相反。
         // 這個陣列只影響"3D畫面怎麼顯示",不影響IK算出的角度數字本身(那組數字才是要給實體硬體的)
         // ⚠️ 馬達5的方向還待確認,目前先假設跟馬達3同向,如果測試後發現不對請回報
-        const VISUAL_SIGN = [1, -1, 1, 1, 1]; // 對應馬達1~5
+        const VISUAL_SIGN = [1, -1, 1, 1, 1]; // 對應馬達1~5,只影響3D畫面顯示方向
+
+        // 🌟 硬體方向修正:馬達2插孔方向跟馬達3,5實體接線相反,這是真實硬體的問題,
+        // 跟上面VISUAL_SIGN(純粹是3D畫面顯示用)完全獨立、互不影響。
+        // ⚠️ 這裡先假設跟VISUAL_SIGN同樣的模式,但這只是起始猜測,務必用實體硬體測試確認,
+        // 如果馬達2實際轉動方向不對,只需要把這裡的-1改成1(或反過來)即可,不會影響3D畫面
+        const HARDWARE_SIGN = [1, -1, 1, 1, 1];
+
+        let isHardwareArmed = false; // 🌟 追蹤S3回報的狀態是不是WORKING(不管是哪種方式解鎖的)
+
+        // 🌟 把"真實角度"(跟IK數學模型一致的角度)轉換成硬體修正後的servo位置(0~1000),送出SET_ANGLES指令
+        function sendAnglesToHardware(thetas) {
+            if (ws.readyState !== 1) return false;
+            const positions = thetas.map((deg, i) => degToServoPos(deg * HARDWARE_SIGN[i]));
+            ws.send(JSON.stringify({ cmd: 'SET_ANGLES', positions }));
+            return true;
+        }
+
+        // 🌟 送出解鎖指令
+        function sendUnlockToHardware() {
+            if (ws.readyState !== 1) return false;
+            ws.send(JSON.stringify({ cmd: 'UNLOCK' }));
+            return true;
+        }
 
         // 度數 <-> servo position(0~1000) 互轉,對應這個系統既定的換算公式
         function degToServoPos(deg) { return deg / 0.24 + 500; }
@@ -945,12 +990,42 @@
 
         // 🌟 手動關節角度測試:直接設定serverAngles,繞過IK,方便驗證單一關節實際轉動方向
         // (serverAngles統一存"真實角度",視覺方向修正集中在animate()裡處理,這裡不用再乘VISUAL_SIGN)
+        document.getElementById('webUnlockBtn').addEventListener('click', () => {
+            if (ws.readyState !== 1) {
+                alert('WebSocket尚未連線,無法送出解鎖指令');
+                return;
+            }
+            sendUnlockToHardware();
+        });
+
+        let lastManualSendTime = 0; // 🌟 節流用,避免拖動滑桿時瘋狂送出WebSocket訊息
+
         const manualJointContainer = document.getElementById('manualJointSliders');
         const manualJointInputs = []; // 存起來,方便IK求解完同步更新這幾條滑桿的顯示
         for (let id = 1; id <= 5; id++) {
             const inp = makeSlider(manualJointContainer, `馬達${id} (度)`, -120, 120, 1, 0, deg => {
-                serverAngles[id] = degToServoPos(deg);
-                lastIkThetas[id-1] = deg; // 🌟 手動調整也算數,讓下次IK求解從這裡熱啟動
+                lastIkThetas[id-1] = deg; // 🌟 更新真實角度陣列(這才是唯一的真實資料來源)
+                serverAngles[id] = degToServoPos(deg); // 讓3D畫面(animate迴圈)正常跟著顯示
+
+                // 🌟 即時用完整5顆馬達角度,檢查這個目標姿態會不會碰撞
+                poseSceneInstantly(lastIkThetas);
+                const collResult = checkSelfCollisionWeb();
+                const badge = document.getElementById('collisionBadge');
+                if (badge) badge.style.display = collResult.collided ? 'block' : 'none';
+                const liveStatusEl = document.getElementById('collisionLiveStatus');
+                if (liveStatusEl) {
+                    liveStatusEl.innerText = collResult.collided ? '⚠️ 目前:碰撞(未送出指令給硬體)' : '目前:安全';
+                    liveStatusEl.style.color = collResult.collided ? '#f38ba8' : '#a6e3a1';
+                }
+
+                // 🌟 只有"不會碰撞"又"硬體已解鎖"時,才真的送出指令,並且節流(100ms一次)避免灌爆連線
+                if (!collResult.collided && isHardwareArmed) {
+                    const now = Date.now();
+                    if (now - lastManualSendTime > 100) {
+                        lastManualSendTime = now;
+                        sendAnglesToHardware(lastIkThetas);
+                    }
+                }
             });
             manualJointInputs.push(inp);
         }
@@ -1430,7 +1505,15 @@
             }
 
             // 🌟 情況3:成功 —— 找到至少一組能到達、且不會碰撞的解
-            statusEl.innerHTML = `<span style="color:#a6e3a1; font-weight:bold;">✅ 成功到達(無碰撞)</span> ${methodNote}<br>` +
+            // 🌟 只有硬體已解鎖時,才真的送出指令;沒解鎖的話,畫面照常顯示結果,純粹是模擬預覽
+            let hwNote = '';
+            if (isHardwareArmed) {
+                sendAnglesToHardware(result.thetas);
+                hwNote = ' <span style="color:#a6e3a1;">📡 已送出給實體馬達</span>';
+            } else {
+                hwNote = ' <span style="color:#6c7086;">(尚未解鎖,僅畫面模擬,未送給實體馬達)</span>';
+            }
+            statusEl.innerHTML = `<span style="color:#a6e3a1; font-weight:bold;">✅ 成功到達(無碰撞)</span> ${methodNote}${hwNote}<br>` +
                 `<span style="color:#6c7086;">(以下角度給硬體用,3D畫面已自動做方向校正顯示)</span><br>${angleText}`;
         });
     </script>
