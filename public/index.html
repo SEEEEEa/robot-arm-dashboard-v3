@@ -76,7 +76,7 @@
         }
         .mask-content .rotate-icon { font-size: 50px; margin-bottom: 20px; animation: rotateAnim 2s infinite ease-in-out; }
         @keyframes rotateAnim { 0% { transform: rotate(0deg); } 50% { transform: rotate(-90deg); } 100% { transform: rotate(0deg); } }
-        @media screen and (orientation: landscape) and (max-width: 1024px) { #orientation-mask { display: flex; } }
+        @media screen and (orientation: landscape) and (max-width: 1024px) and (hover: none) and (pointer: coarse) { #orientation-mask { display: flex; } }
     </style>
 </head>
 <body>
@@ -1047,12 +1047,16 @@
                     liveStatusEl.style.color = collResult.collided ? '#f38ba8' : '#a6e3a1';
                 }
 
+                // 🌟 [暫時除錯用] 印出關鍵數值,方便定位問題,確認後會拿掉
+                console.log('[除錯] collided=', collResult.collided, ' isHardwareArmed=', isHardwareArmed, ' ws.readyState=', ws.readyState);
+
                 // 🌟 只有"不會碰撞"又"硬體已解鎖"時,才真的送出指令,並且節流(100ms一次)避免灌爆連線
                 if (!collResult.collided && isHardwareArmed) {
                     const now = Date.now();
                     if (now - lastManualSendTime > 100) {
                         lastManualSendTime = now;
-                        sendAnglesToHardware(lastIkThetas);
+                        const sendOk = sendAnglesToHardware(lastIkThetas);
+                        console.log('[除錯] sendAnglesToHardware回傳=', sendOk); // 🌟 [暫時除錯用]
                     }
                 }
             });
