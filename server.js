@@ -11,6 +11,12 @@ const wss = new WebSocket.Server({ server });
 // 讓 Express 提供 public 資料夾裡的網頁檔案
 app.use(express.static(path.join(__dirname, 'public')));
 
+// 🌟 專門給外部喚醒服務(如UptimeRobot)定期戳的輕量端點,避免Render免費方案閒置休眠
+// 回應內容很小,不會像戳首頁那樣載入整個網頁+3D模型資源,對兩邊都比較省資源
+app.get('/health', (req, res) => {
+    res.status(200).send('OK');
+});
+
 // 記憶體：儲存最後一次收到的機械臂狀態，讓剛打開網頁的人也能馬上看到！
 let latestState = {
     status: "OFFLINE",
