@@ -459,7 +459,14 @@
     
     if (data.status === "WORKING") {
         latestTopology = data.topology || [];
-        latestTopology.forEach(n => serverAngles[n.id] = n.angle);
+        // 🌟 修正:S3回傳的n.angle,是"已經套用過HARDWARE_SIGN修正"的servo值(因為送給硬體的指令本身就是修正後的)
+        // 直接存進serverAngles會導致畫面渲染時,VISUAL_SIGN又疊加套用一次,造成畫面跟實際姿態對不上
+        // 這裡要先把硬體修正"反向消除",換算回真實角度,才能存進serverAngles
+        latestTopology.forEach(n => {
+            const hwCorrectedDeg = (n.angle - 500) * 0.24; // 硬體回傳值 → 角度
+            const trueDeg = hwCorrectedDeg / (HARDWARE_SIGN[n.id-1] || 1); // 反向消除硬體修正,還原真實角度(HARDWARE_SIGN只會是+1或-1,除法=乘法)
+            serverAngles[n.id] = degToServoPos(trueDeg); // 換回servoAngles慣用的servo值格式,存入
+        });
 
         // 🌟 修正:不再根據"實際接了幾顆馬達"動態重建場景結構
         // 畫面永遠維持完整的手臂姿態(用MOCK_TOPOLOGY建立),真實資料只拿來更新角度,不拿來決定"顯示幾顆"
@@ -523,12 +530,13 @@
     }
 
             // 🌟 修復 1：動態換算並印出真實度數！
+            // 🌟 再次修正:同樣要反向消除硬體修正,顯示的才是"真實角度",不是送給硬體、已經修正過方向的值
             if (data.status === "WORKING" && data.topology) {
                 let angleStr = "";
                 data.topology.forEach(n => {
-                    // 將 0~1000 的數值，對應到 -120° ~ +120° (每單位 0.24 度)
-                    let degree = ((n.angle - 500) * 0.24).toFixed(1); 
-                    angleStr += `ID ${n.id}: <span style="color:#a6e3a1">${degree}°</span><br>`;
+                    let hwDeg = (n.angle - 500) * 0.24;
+                    let trueDeg = (hwDeg / (HARDWARE_SIGN[n.id-1] || 1)).toFixed(1);
+                    angleStr += `ID ${n.id}: <span style="color:#a6e3a1">${trueDeg}°</span><br>`;
                 });
                 document.getElementById('angleListData').innerHTML = angleStr || "無數據";
             }
