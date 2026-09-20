@@ -462,11 +462,17 @@
         // 🌟 修正:S3回傳的n.angle,是"已經套用過HARDWARE_SIGN修正"的servo值(因為送給硬體的指令本身就是修正後的)
         // 直接存進serverAngles會導致畫面渲染時,VISUAL_SIGN又疊加套用一次,造成畫面跟實際姿態對不上
         // 這裡要先把硬體修正"反向消除",換算回真實角度,才能存進serverAngles
-        latestTopology.forEach(n => {
-            const hwCorrectedDeg = (n.angle - 500) * 0.24; // 硬體回傳值 → 角度
-            const trueDeg = hwCorrectedDeg / (HARDWARE_SIGN[n.id-1] || 1); // 反向消除硬體修正,還原真實角度(HARDWARE_SIGN只會是+1或-1,除法=乘法)
-            serverAngles[n.id] = degToServoPos(trueDeg); // 換回servoAngles慣用的servo值格式,存入
-        });
+        // 🌟 再修正:拖曳滑桿後500ms內,優先相信本地預覽畫面,暫緩接受這裡的即時回報覆蓋——
+        // 不然拖到會碰撞的角度時(指令不會送出,實體角度不變),S3每100ms回報"沒變過的舊角度",
+        // 會不斷把本地正在預覽的(會碰撞的)畫面拉回去,導致視覺上看起來像"卡住不動"
+        if (Date.now() - lastManualDragTime > 500) {
+            latestTopology.forEach(n => {
+                const hwCorrectedDeg = (n.angle - 500) * 0.24; // 硬體回傳值 → 角度
+                const trueDeg = hwCorrectedDeg / (HARDWARE_SIGN[n.id-1] || 1); // 反向消除硬體修正,還原真實角度(HARDWARE_SIGN只會是+1或-1,除法=乘法)
+                serverAngles[n.id] = degToServoPos(trueDeg); // 換回servoAngles慣用的servo值格式,存入
+            });
+        }
+        // 🌟 拖曳中(500ms內)不執行上面的覆蓋,讓本地預覽畫面優先顯示,latestTopology本身在上面已經更新過,不受影響
 
         // 🌟 修正:不再根據"實際接了幾顆馬達"動態重建場景結構
         // 畫面永遠維持完整的手臂姿態(用MOCK_TOPOLOGY建立),真實資料只拿來更新角度,不拿來決定"顯示幾顆"
@@ -1036,12 +1042,14 @@
         });
 
         let lastManualSendTime = 0; // 🌟 節流用,避免拖動滑桿時瘋狂送出WebSocket訊息
+        let lastManualDragTime = 0; // 🌟 追蹤最後一次手動拖曳的時間,拖曳後短時間內,畫面預覽優先,暫緩接受S3的即時回報覆蓋
 
         const manualJointContainer = document.getElementById('manualJointSliders');
         const manualJointInputs = []; // 存起來,方便IK求解完同步更新這幾條滑桿的顯示
         for (let id = 1; id <= 5; id++) {
             const inp = makeSlider(manualJointContainer, `馬達${id} (度)`, -120, 120, 1, 0, deg => {
                 lastIkThetas[id-1] = deg; // 🌟 更新真實角度陣列(這才是唯一的真實資料來源)
+                lastManualDragTime = Date.now(); // 🌟 記錄這次拖曳的時間,讓畫面預覽在短時間內優先於S3回報
                 serverAngles[id] = degToServoPos(deg); // 讓3D畫面(animate迴圈)正常跟著顯示
 
                 // 🌟 即時用完整5顆馬達角度,檢查這個目標姿態會不會碰撞
