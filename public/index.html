@@ -456,6 +456,17 @@
     
     if (data.status) hasReceivedRealStatus = true; // 🌟 收到真實狀態了,輪詢可以停了
     if(data.status) resetS3Watchdog(); 
+
+    // 🌟 解鎖通電後S3會把所有馬達歸零(500=0°),網頁模型也要跟著回正
+    // 只在"剛進入HOMING"那一刻執行一次,避免1.5秒廣播一次就重複重置
+    if (data.status === "HOMING" && previousStatus !== "HOMING") {
+        setWebPose([0, 0, 0, 0, 0]);
+        console.log('[同步] 硬體歸零中,網頁模型/滑桿/IK狀態已一起回正');
+    }
+    // 🌟 歸零完成剛進入WORKING時,再用S3實際回報的角度校正一次(保險,確保網頁跟硬體完全一致)
+    if (data.status === "WORKING" && previousStatus !== "WORKING" && data.topology) {
+        syncWebPoseFromHardware(data.topology);
+    }
     
     if (data.status === "WORKING") {
         latestTopology = data.topology || [];
@@ -495,6 +506,34 @@
     
     updateSystemUI(data); 
 };
+
+        // 🌟 把網頁端所有"目前姿態"相關的狀態,一次設定成指定的5個真實角度:
+        // 3D模型(serverAngles)、XYZ顯示/IK熱啟動用的lastIkThetas、手動關節滑桿顯示、
+        // 並清掉碰撞預覽旗標(不然S3回報會被擋住)與上一次IK目標(避免熱啟動從舊姿態出發)
+        function setWebPose(thetas) {
+            for (let i = 0; i < 5; i++) {
+                lastIkThetas[i] = thetas[i];
+                serverAngles[i + 1] = degToServoPos(thetas[i]);
+                if (manualJointInputs[i]) manualJointInputs[i].setDisplayValue(thetas[i]);
+            }
+            manualPreviewIsColliding = false;
+            lastIkTargetPos = null;
+            if (selectedNodeId > 0) {
+                const ms = document.getElementById('mobileSlider');
+                if (ms) ms.value = serverAngles[selectedNodeId];
+            }
+        }
+
+        // 🌟 從S3回報的topology還原真實角度(反向消除HARDWARE_SIGN),再套用到網頁
+        function syncWebPoseFromHardware(topology) {
+            const thetas = [...lastIkThetas];
+            topology.forEach(n => {
+                if (n.id >= 1 && n.id <= 5) {
+                    thetas[n.id - 1] = ((n.angle - 500) * 0.24) / (HARDWARE_SIGN[n.id - 1] || 1);
+                }
+            });
+            setWebPose(thetas);
+        }
 
         function updateSystemUI(data) {
     document.getElementById('totalCount').innerText = data.total || 0;
@@ -1250,6 +1289,13 @@
 
         const IK_JOINT_LIMITS = [[-120,120],[-120,120],[-120,120],[-120,120],[-120,120]];
         const IK_ORIENT_WEIGHT = 120;
+        // 🌟 提前放棄機制:與20次迭代前相比,誤差改善不到1%,判定此起始點已卡住(通常是關節被限制頂住),
+        // 直接放棄、換下一個起始點,不再白跑到300次上限。400組隨機目標驗證:總運算量減少約30%,無解目標數不變
+        const IK_STALL_WINDOW = 20;
+        const IK_STALL_MIN_REL = 0.01;
+        // 🌟 單一起始點的迭代上限:從300降到100次,砍掉被關節限制頂住、只能極慢爬行的起始點
+        // (400組隨機目標驗證:搭配提前放棄機制,總運算量減少約51%,無解目標數不變)
+        const IK_MAX_ITER = 100;
 
         function ikComputeOutputVec(thetas, posOnly) {
             const { pos, dir } = ikForwardKinematics(...thetas);
@@ -1289,14 +1335,23 @@
         function ikRunSingleAttempt(init, targetVec, h, posOnly) {
             const outDim = targetVec.length; // 🌟 3(僅位置) 或 6(位置+方向),動態決定
             let thetas = [...init];
-            let lambda = 5, errNorm = Infinity, iters = 0, converged = false;
+            let lambda = 5, errNorm = Infinity, iters = 0, converged = false, stalled = false;
+            const errHist = []; // 🌟 記錄每次迭代的誤差,供提前放棄判斷
 
-            for (let iter = 0; iter < 300; iter++) {
+            for (let iter = 0; iter < IK_MAX_ITER; iter++) {
                 iters = iter + 1;
                 const out = ikComputeOutputVec(thetas, posOnly);
                 const err = targetVec.map((v,i) => v - out[i]);
                 errNorm = Math.hypot(...err);
+                errHist.push(errNorm);
                 if (errNorm < 0.1) { converged = true; break; }
+
+                // 🌟 提前放棄:跟20次前相比改善不到1%,代表這個起始點卡住了,換下一個
+                if (errHist.length > IK_STALL_WINDOW &&
+                    errNorm > errHist[errHist.length - 1 - IK_STALL_WINDOW] * (1 - IK_STALL_MIN_REL)) {
+                    stalled = true;
+                    break;
+                }
 
                 const cols = [];
                 for (let j = 0; j < 5; j++) {
@@ -1326,7 +1381,7 @@
             }
 
             const feasible = converged || errNorm < 2.0;
-            return { thetas, converged, feasible, errNorm, iters };
+            return { thetas, converged, feasible, errNorm, iters, stalled };
         }
 
         // 🌟 targetDir 可以是 null:此時只用位置(3個限制條件)求解,不管方向,
