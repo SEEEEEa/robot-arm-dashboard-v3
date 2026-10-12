@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>模組化手臂測試</title>
+<style>
+    :root { --bg:#11111b; --panel:#1e1e2e; --line:#45475a; --text:#cdd6f4; --sub:#a6adc8; --accent:#f9e2af; --ok:#a6e3a1; --bad:#f38ba8; --field:#313244; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, "Noto Sans TC", sans-serif; font-size:13px; overflow:hidden; }
+    #view { position:fixed; inset:0; }
+    #panel { position:fixed; top:10px; left:10px; bottom:10px; width:330px; max-width:calc(100vw - 20px); background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; overflow-y:auto; }
+    h2 { font-size:15px; margin:0 0 4px; color:var(--accent); }
+    h3 { font-size:13px; margin:14px 0 6px; color:var(--accent); border-top:1px solid var(--line); padding-top:10px; }
+    .note { color:var(--sub); font-size:11px; line-height:1.5; }
+    select, input[type=number] { background:var(--field); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:3px 4px; font-size:12px; }
+    button { background:var(--accent); color:#111; border:none; border-radius:6px; padding:6px 10px; font-weight:bold; cursor:pointer; font-size:12px; }
+    button.ghost { background:var(--field); color:var(--text); border:1px solid var(--line); font-weight:normal; }
+    .row { display:flex; gap:6px; align-items:center; margin-bottom:5px; flex-wrap:wrap; }
+    .mrow { display:grid; grid-template-columns: 52px 1fr 1fr; gap:4px; align-items:center; margin-bottom:4px; }
+    .slider { margin-bottom:4px; }
+    .slider .lbl { display:flex; justify-content:space-between; }
+    .slider input { width:100%; }
+    .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; }
+    .grid3 input { width:100%; }
+    #readout, #ikResult { font-family: ui-monospace, Consolas, monospace; font-size:11.5px; line-height:1.55; white-space:pre-wrap; }
+    .ok { color:var(--ok); } .bad { color:var(--bad); }
+    #toggle { display:none; position:fixed; top:10px; right:10px; z-index:5; }
+    @media (max-width: 600px) { #panel { top:52px; width:auto; right:10px; bottom:auto; max-height:55vh; } #toggle { display:block; } #panel.hidden { display:none; } }
+</style>
+</head>
+<body>
+<div id="view"></div>
+<button id="toggle" class="ghost">面板</button>
+<div id="panel">
+    <h2>模組化手臂測試頁</h2>
+    <div class="note">純模擬,不會連線、不會送指令給硬體。灰色方塊=馬達 body(以轉軸點為中心),短灰柱=pivot,紫色=連接件,綠色=夾爪,黃色箭頭=每顆馬達的轉軸方向。</div>
+
+    <h3>1. 組裝</h3>
+    <div class="row">
+        <span>馬達數量</span>
+        <select id="motorCount"><option>1</option><option>2</option><option>3</option><option>4</option><option selected>5</option></select>
+        <button id="presetCurrent" class="ghost">載入目前實體手臂</button>
+    </div>
+    <div class="mrow note"><span></span><span>往下一個零件接的面</span><span>接在該面上的連接件</span></div>
+    <div id="assemblyRows"></div>
+    <div class="row"><span>末端</span><select id="eeSelect"></select></div>
+
+    <h3>2. 手動關節角度</h3>
+    <div id="sliders"></div>
+    <div class="row"><button id="zeroBtn" class="ghost">全部歸零</button></div>
+
+    <h3>3. 目前狀態(正向運動學)</h3>
+    <div id="readout"></div>
+
+    <h3>4. 逆向運動學(DLS 數值解)</h3>
+    <div class="note">Z 為離地高度(= 數學座標 + 215)。少於 5 顆馬達時自動只求位置。</div>
+    <div class="grid3" style="margin:6px 0;">
+        <label>X<input id="ikX" type="number" value="300"></label>
+        <label>Y<input id="ikY" type="number" value="0"></label>
+        <label>Z(離地)<input id="ikZ" type="number" value="500"></label>
+    </div>
+    <div class="row"><label><input id="useDir" type="checkbox" checked> 指定方向</label></div>
+    <div class="grid3" id="dirInputs">
+        <label>dx<input id="dX" type="number" value="1" step="0.1"></label>
+        <label>dy<input id="dY" type="number" value="0" step="0.1"></label>
+        <label>dz<input id="dZ" type="number" value="0" step="0.1"></label>
+    </div>
+    <div class="row" style="margin-top:6px;"><button id="ikBtn">求解並套用</button><button id="ikFromTip" class="ghost">目標=目前末端</button></div>
+    <div id="ikResult"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="modular_kinematics.js"></script>
+<script>
+const Z_GROUND = PART_LIBRARY.base.groundHeight;
+
+// ---------- 狀態 ----------
+let assembly = JSON.parse(JSON.stringify(CURRENT_ARM_ASSEMBLY));
+let thetas = assembly.motors.map(() => 0);
+let ikTarget = null;
+
+// ---------- 3D 場景(直接用 Z 朝上的世界座標) ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.getElementById('view').appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x11111b);
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 10000);
+camera.up.set(0, 0, 1);
+camera.position.set(900, -900, 600);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0, 200);
+controls.update();
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const sun = new THREE.DirectionalLight(0xffffff, 0.8); sun.position.set(500, -700, 1200); scene.add(sun);
+
+// 地板(離地 0 = 數學座標 -215)
+const grid = new THREE.GridHelper(1400, 28, 0x585b70, 0x313244);
+grid.rotation.x = Math.PI / 2; grid.position.z = -Z_GROUND; scene.add(grid);
+// 世界座標軸(以底座插孔為原點): X紅 Y綠 Z藍
+[[1,0,0,0xf38ba8],[0,1,0,0xa6e3a1],[0,0,1,0x89b4fa]].forEach(([x,y,z,c]) =>
+    scene.add(new THREE.ArrowHelper(new THREE.Vector3(x,y,z), new THREE.Vector3(0,0,0), 160, c, 14, 8)));
+// 底座圓柱
+const baseGeo = new THREE.CylinderGeometry(70, 80, Z_GROUND, 32);
+const baseMesh = new THREE.Mesh(baseGeo, new THREE.MeshPhongMaterial({ color: 0x585b70 }));
+baseMesh.rotation.x = Math.PI / 2; baseMesh.position.z = -Z_GROUND / 2; scene.add(baseMesh);
+
+const armGroup = new THREE.Group(); scene.add(armGroup);
+const mat = {
+    body: new THREE.MeshPhongMaterial({ color: 0xbac2de, transparent: true, opacity: 0.85 }),
+    pivot: new THREE.MeshPhongMaterial({ color: 0x7f849c }),
+    c: new THREE.MeshPhongMaterial({ color: 0xcba6f7 }),
+    ee: new THREE.MeshPhongMaterial({ color: 0x94e2d5 }),
+    m: new THREE.MeshPhongMaterial({ color: 0x9399b2 }),
+    tip: new THREE.MeshPhongMaterial({ color: 0xf38ba8 }),
+    target: new THREE.MeshPhongMaterial({ color: 0xfab387, transparent: true, opacity: 0.7 }),
+};
+function addRod(a, b, r, material) {
+    const va = new THREE.Vector3(...a), vb = new THREE.Vector3(...b);
+    const len = va.distanceTo(vb); if (len < 1e-6) return;
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 16), material);
+    m.position.copy(va).add(vb).multiplyScalar(0.5);
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), vb.clone().sub(va).normalize());
+    armGroup.add(m);
+}
+function toMatrix4(T) { const m = new THREE.Matrix4(); m.set(...T); return m; }
+
+function drawArm(fk) {
+    while (armGroup.children.length) armGroup.remove(armGroup.children[0]);
+    // 馬達:pivot(輸入→轉軸點)+ 以轉軸點為中心的80mm方塊(頂面、側面剛好在+40)
+    fk.inputFrames.forEach((Tin, i) => {
+        const Trot = fk.motorFrames[i];
+        addRod([Tin[3], Tin[7], Tin[11]], [Trot[3], Trot[7], Trot[11]], 12, mat.pivot);
+        const box = new THREE.Mesh(new THREE.BoxGeometry(80, 80, 80), mat.body);
+        box.applyMatrix4(toMatrix4(Trot)); armGroup.add(box);
+        box.add(new THREE.LineSegments(new THREE.EdgesGeometry(box.geometry), new THREE.LineBasicMaterial({ color: 0x313244 })));
+        // 標示側面(紅點)方便對照實體
+        const mark = new THREE.Mesh(new THREE.SphereGeometry(7, 12, 12), new THREE.MeshPhongMaterial({ color: 0xf38ba8 }));
+        mark.position.set(40, 0, 0); box.add(mark);
+        // 轉軸方向
+        const ax = new THREE.Vector3(Trot[2], Trot[6], Trot[10]);
+        armGroup.add(new THREE.ArrowHelper(ax, new THREE.Vector3(Trot[3], Trot[7], Trot[11]), 110, 0xf9e2af, 14, 8));
+    });
+    // 連接件與末端:骨架線
+    const sk = fk.skeleton;
+    for (let k = 1; k < sk.length; k++) {
+        const o = sk[k].owner;
+        if (sk[k - 1].owner !== o && !(o.startsWith('c') || o === 'ee')) continue;
+        if (o.startsWith('c')) addRod(sk[k - 1].p, sk[k].p, 9, mat.c);
+        else if (o === 'ee') addRod(sk[k - 1].p, sk[k].p, 7, mat.ee);
+    }
+    // 末端點與方向
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(9, 16, 16), mat.tip);
+    tip.position.set(...fk.pos); armGroup.add(tip);
+    armGroup.add(new THREE.ArrowHelper(new THREE.Vector3(...fk.dir), new THREE.Vector3(...fk.pos), 80, 0xf38ba8, 14, 8));
+    if (ikTarget) {
+        const t = new THREE.Mesh(new THREE.SphereGeometry(13, 16, 16), mat.target);
+        t.position.set(...ikTarget); armGroup.add(t);
+    }
+}
+
+// ---------- 介面 ----------
+const motorCountSel = document.getElementById('motorCount');
+const rowsEl = document.getElementById('assemblyRows');
+const slidersEl = document.getElementById('sliders');
+const eeSel = document.getElementById('eeSelect');
+Object.entries(PART_LIBRARY.endEffectors).forEach(([k, v]) => eeSel.add(new Option(v.name, k)));
+
+function buildAssemblyRows() {
+    rowsEl.innerHTML = '';
+    assembly.motors.forEach((m, i) => {
+        const row = document.createElement('div'); row.className = 'mrow';
+        row.innerHTML = `<span>馬達${i + 1}</span>`;
+        const fs = document.createElement('select');
+        Object.entries(PART_LIBRARY.motor.faces).forEach(([k, v]) => fs.add(new Option(`${v.name} (face ${k})`, k)));
+        fs.value = m.face;
+        fs.onchange = () => { m.face = +fs.value; update(); };
+        const cs = document.createElement('select');
+        Object.entries(PART_LIBRARY.connectors).forEach(([k, v]) => cs.add(new Option(v.name, k)));
+        cs.value = m.connector;
+        cs.onchange = () => { m.connector = cs.value; update(); };
+        row.append(fs, cs); rowsEl.appendChild(row);
+    });
+    eeSel.value = assembly.endEffector;
+}
+eeSel.onchange = () => { assembly.endEffector = eeSel.value; update(); };
+
+function buildSliders() {
+    slidersEl.innerHTML = '';
+    assembly.motors.forEach((_, i) => {
+        const w = document.createElement('div'); w.className = 'slider';
+        w.innerHTML = `<div class="lbl"><span>馬達${i + 1}</span><span id="sv${i}">${thetas[i].toFixed(1)}°</span></div>
+                       <input id="s${i}" type="range" min="-120" max="120" step="1" value="${thetas[i]}">`;
+        slidersEl.appendChild(w);
+        w.querySelector('input').oninput = e => { thetas[i] = +e.target.value; update(false); };
+    });
+}
+function syncSliders() {
+    thetas.forEach((t, i) => {
+        const s = document.getElementById('s' + i), v = document.getElementById('sv' + i);
+        if (s) s.value = t; if (v) v.innerText = t.toFixed(1) + '°';
+    });
+}
+
+motorCountSel.onchange = () => {
+    const n = +motorCountSel.value;
+    while (assembly.motors.length < n) assembly.motors.push({ face: 1, connector: 'short' });
+    assembly.motors.length = n;
+    thetas = Array.from({ length: n }, (_, i) => thetas[i] || 0);
+    buildAssemblyRows(); buildSliders(); update();
+};
+document.getElementById('presetCurrent').onclick = () => {
+    assembly = JSON.parse(JSON.stringify(CURRENT_ARM_ASSEMBLY));
+    thetas = assembly.motors.map(() => 0); motorCountSel.value = assembly.motors.length;
+    ikTarget = null; buildAssemblyRows(); buildSliders(); update();
+};
+document.getElementById('zeroBtn').onclick = () => { thetas = thetas.map(() => 0); syncSliders(); update(false); };
+
+const f1 = v => (Math.abs(v) < 0.05 ? 0 : v).toFixed(1);
+const f3 = v => (Math.abs(v) < 5e-4 ? 0 : v).toFixed(3);
+function update(rebuildUI = true) {
+    const fk = modularFK(assembly, thetas);
+    drawArm(fk);
+    let s = `末端 (離地)  X ${f1(fk.pos[0])}  Y ${f1(fk.pos[1])}  Z ${f1(fk.pos[2] + Z_GROUND)}\n`;
+    s += `末端方向    (${fk.dir.map(f3).join(', ')})\n\n`;
+    s += `轉軸點(數學座標)與轉軸方向:\n`;
+    fk.motorFrames.forEach((T, i) => {
+        s += `M${i + 1} (${f1(T[3])}, ${f1(T[7])}, ${f1(T[11])})  軸(${[T[2], T[6], T[10]].map(v => f1(v)).join(',')})\n`;
+    });
+    document.getElementById('readout').innerText = s;
+    syncSliders();
+}
+
+// ---------- IK ----------
+const useDir = document.getElementById('useDir');
+useDir.onchange = () => document.getElementById('dirInputs').style.opacity = useDir.checked ? 1 : 0.4;
+document.getElementById('ikFromTip').onclick = () => {
+    const fk = modularFK(assembly, thetas);
+    ['ikX', 'ikY'].forEach((id, k) => document.getElementById(id).value = fk.pos[k].toFixed(1));
+    document.getElementById('ikZ').value = (fk.pos[2] + Z_GROUND).toFixed(1);
+    ['dX', 'dY', 'dZ'].forEach((id, k) => document.getElementById(id).value = fk.dir[k].toFixed(3));
+};
+document.getElementById('ikBtn').onclick = () => {
+    const v = id => +document.getElementById(id).value;
+    const pos = [v("ikX"), v("ikY"), v("ikZ") - Z_GROUND];
+    const dir = useDir.checked ? [v("dX"), v("dY"), v("dZ")] : null;
+    ikTarget = pos;
+    const t0 = performance.now();
+    const r = modularIK(assembly, pos, dir, { warmStart: thetas });
+    const ms = performance.now() - t0;
+    const el = document.getElementById('ikResult');
+    const fk = modularFK(assembly, r.thetas);
+    const pErr = Math.hypot(...fk.pos.map((v, k) => v - pos[k]));
+    let s = `<span class="${r.converged ? 'ok' : 'bad'}">${r.converged ? '✔ 收斂' : '✘ 未收斂(顯示最接近的姿態)'}</span>\n`;
+    s += `模式 ${r.mode === 'position' ? '只求位置' : '位置+方向'}${dir && r.mode === 'position' ? '(馬達少於5顆,忽略方向)' : ''}\n`;
+    s += `迭代 ${r.iterations} 次,耗時 ${ms.toFixed(0)} ms\n位置誤差 ${pErr.toFixed(2)} mm\n`;
+    s += `角度 [${r.thetas.map(v => v.toFixed(1)).join(', ')}]`;
+    el.innerHTML = s;
+    thetas = r.thetas.slice();
+    update(false);
+};
+
+document.getElementById('toggle').onclick = () => document.getElementById('panel').classList.toggle('hidden');
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+(function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
+
+buildAssemblyRows(); buildSliders(); update();
+</script>
+</body>
+</html>
