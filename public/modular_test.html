@@ -17,7 +17,16 @@
     button { background:var(--accent); color:#111; border:none; border-radius:6px; padding:6px 10px; font-weight:bold; cursor:pointer; font-size:12px; }
     button.ghost { background:var(--field); color:var(--text); border:1px solid var(--line); font-weight:normal; }
     .row { display:flex; gap:6px; align-items:center; margin-bottom:5px; flex-wrap:wrap; }
-    .mrow { display:grid; grid-template-columns: 52px 1fr 1fr; gap:4px; align-items:center; margin-bottom:4px; }
+    .card { display:flex; align-items:center; gap:6px; background:var(--field); border:1px solid var(--line); border-radius:6px; padding:4px 6px; margin-bottom:3px; }
+    .card .idx { color:var(--sub); font-size:11px; width:18px; }
+    .card .name { flex:1; }
+    .card .x { background:transparent; color:var(--bad); border:none; padding:2px 6px; font-size:14px; }
+    .card.base { opacity:0.75; }
+    .tag { font-size:10px; padding:1px 5px; border-radius:8px; margin-right:4px; }
+    .tag.m { background:#bac2de; color:#111; } .tag.c { background:#cba6f7; color:#111; } .tag.e { background:#94e2d5; color:#111; }
+    #nextBox { margin-top:8px; padding:8px; border:1px dashed var(--accent); border-radius:6px; }
+    #nextBtns { display:flex; flex-wrap:wrap; gap:5px; margin-top:6px; }
+    #nextBtns button:disabled { opacity:0.35; cursor:not-allowed; }
     .slider { margin-bottom:4px; }
     .slider .lbl { display:flex; justify-content:space-between; }
     .slider input { width:100%; }
@@ -37,14 +46,13 @@
     <div class="note">純模擬,不會連線、不會送指令給硬體。灰色方塊=馬達 body(以轉軸點為中心),短灰柱=pivot,紫色=連接件,綠色=夾爪,黃色箭頭=每顆馬達的轉軸方向。</div>
 
     <h3>1. 組裝</h3>
-    <div class="row">
-        <span>馬達數量</span>
-        <select id="motorCount"><option>1</option><option>2</option><option>3</option><option>4</option><option selected>5</option></select>
-        <button id="presetCurrent" class="ghost">載入目前實體手臂</button>
+    <div class="note">從底座開始,一個一個往上接。每接一個,下面就會列出下一個可以接的零件;連接件可以連續接,馬達也可以直接接馬達。橘色圓環 = 下一個零件會接的位置。</div>
+    <div class="row" style="margin-top:6px;"><button id="presetCurrent" class="ghost">載入目前實體手臂</button><button id="clearBtn" class="ghost">清空重來</button></div>
+    <div id="chain"></div>
+    <div id="nextBox">
+        <div id="nextHint" class="note"></div>
+        <div id="nextBtns"></div>
     </div>
-    <div class="mrow note"><span></span><span>往下一個零件接的面</span><span>接在該面上的連接件</span></div>
-    <div id="assemblyRows"></div>
-    <div class="row"><span>末端</span><select id="eeSelect"></select></div>
 
     <h3>2. 手動關節角度</h3>
     <div id="sliders"></div>
@@ -78,7 +86,7 @@ const Z_GROUND = PART_LIBRARY.base.groundHeight;
 
 // ---------- 狀態 ----------
 let assembly = JSON.parse(JSON.stringify(CURRENT_ARM_ASSEMBLY));
-let thetas = assembly.motors.map(() => 0);
+let thetas = new Array(motorCount(assembly)).fill(0);
 let ikTarget = null;
 
 // ---------- 3D 場景(直接用 Z 朝上的世界座標) ----------
@@ -156,6 +164,13 @@ function drawArm(fk) {
     const tip = new THREE.Mesh(new THREE.SphereGeometry(9, 16, 16), mat.tip);
     tip.position.set(...fk.pos); armGroup.add(tip);
     armGroup.add(new THREE.ArrowHelper(new THREE.Vector3(...fk.dir), new THREE.Vector3(...fk.pos), 80, 0xf38ba8, 14, 8));
+    // 下一個零件會接的位置:橘色圓環 + 插入方向箭頭
+    if (fk.openSocket) {
+        const S = fk.openSocket;
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(22, 3.5, 10, 32), new THREE.MeshPhongMaterial({ color: 0xfab387 }));
+        ring.applyMatrix4(toMatrix4(S)); armGroup.add(ring);
+        armGroup.add(new THREE.ArrowHelper(new THREE.Vector3(S[2], S[6], S[10]), new THREE.Vector3(S[3], S[7], S[11]), 70, 0xfab387, 16, 10));
+    }
     if (ikTarget) {
         const t = new THREE.Mesh(new THREE.SphereGeometry(13, 16, 16), mat.target);
         t.position.set(...ikTarget); armGroup.add(t);
@@ -163,39 +178,83 @@ function drawArm(fk) {
 }
 
 // ---------- 介面 ----------
-const motorCountSel = document.getElementById('motorCount');
-const rowsEl = document.getElementById('assemblyRows');
+const chainEl = document.getElementById('chain');
 const slidersEl = document.getElementById('sliders');
-const eeSel = document.getElementById('eeSelect');
-Object.entries(PART_LIBRARY.endEffectors).forEach(([k, v]) => eeSel.add(new Option(v.name, k)));
 
-function buildAssemblyRows() {
-    rowsEl.innerHTML = '';
-    assembly.motors.forEach((m, i) => {
-        const row = document.createElement('div'); row.className = 'mrow';
-        row.innerHTML = `<span>馬達${i + 1}</span>`;
-        const fs = document.createElement('select');
-        Object.entries(PART_LIBRARY.motor.faces).forEach(([k, v]) => fs.add(new Option(`${v.name} (face ${k})`, k)));
-        fs.value = m.face;
-        fs.onchange = () => { m.face = +fs.value; update(); };
-        const cs = document.createElement('select');
-        Object.entries(PART_LIBRARY.connectors).forEach(([k, v]) => cs.add(new Option(v.name, k)));
-        cs.value = m.connector;
-        cs.onchange = () => { m.connector = cs.value; update(); };
-        row.append(fs, cs); rowsEl.appendChild(row);
-    });
-    eeSel.value = assembly.endEffector;
+function partName(part) {
+    if (part.kind === 'motor') return PART_LIBRARY.motor.name;
+    if (part.kind === 'ee') return PART_LIBRARY.endEffectors[part.key].name;
+    return PART_LIBRARY.connectors[part.key].name;
 }
-eeSel.onchange = () => { assembly.endEffector = eeSel.value; update(); };
+// 零件在序列中的位置 → 它是第幾顆馬達(不是馬達則回傳 -1)
+function motorIndexOf(pi) {
+    if (assembly.parts[pi].kind !== 'motor') return -1;
+    return assembly.parts.slice(0, pi).filter(p => p.kind === 'motor').length;
+}
+
+function buildChain() {
+    chainEl.innerHTML = '<div class="card base"><span class="idx">0</span><span class="name">底座</span></div>';
+    assembly.parts.forEach((part, pi) => {
+        const card = document.createElement('div'); card.className = 'card';
+        const mi = motorIndexOf(pi);
+        const tag = part.kind === 'motor' ? `<span class="tag m">馬達${mi + 1}</span>` : part.kind === 'ee' ? '<span class="tag e">末端</span>' : '<span class="tag c">連接件</span>';
+        card.innerHTML = `<span class="idx">${pi + 1}</span><span class="name">${tag}${partName(part)}</span>`;
+        if (part.kind === 'motor') {
+            const fs = document.createElement('select');
+            fs.title = '下一個零件接在這顆馬達的哪一面';
+            Object.entries(PART_LIBRARY.motor.faces).forEach(([k, v]) => fs.add(new Option(`往下接${v.name}`, k)));
+            fs.value = part.face;
+            fs.onchange = () => { part.face = +fs.value; update(); };
+            card.appendChild(fs);
+        }
+        const x = document.createElement('button'); x.className = 'x'; x.innerText = '✕'; x.title = '拿掉這個零件';
+        x.onclick = () => {
+            if (part.kind === 'motor') thetas.splice(mi, 1);
+            assembly.parts.splice(pi, 1);
+            refreshAll();
+        };
+        card.appendChild(x);
+        chainEl.appendChild(card);
+    });
+    buildNextBox();
+}
+
+function buildNextBox() {
+    const hint = document.getElementById('nextHint'), btns = document.getElementById('nextBtns');
+    btns.innerHTML = '';
+    const last = assembly.parts[assembly.parts.length - 1];
+    if (last && last.kind === 'ee') {
+        hint.innerHTML = '✔ 已接上末端,組裝完成。要繼續改,先按末端旁的 ✕ 拿掉它。';
+        return;
+    }
+    let where = '底座插孔';
+    if (last && last.kind === 'motor') where = `馬達${motorCount(assembly)} 的${PART_LIBRARY.motor.faces[last.face].name}`;
+    else if (last) where = `${partName(last)} 的出口`;
+    hint.innerHTML = `下一個要接什麼?(接在 <b>${where}</b>)`;
+    const add = (part, label) => {
+        const b = document.createElement('button'); b.className = 'ghost'; b.innerText = label;
+        b.disabled = !canAppend(assembly, part);
+        if (part.kind === 'motor' && b.disabled) b.innerText += `(已達${MAX_MOTORS}顆)`;
+        b.onclick = () => {
+            assembly.parts.push(part);
+            if (part.kind === 'motor') thetas.push(0);
+            refreshAll();
+        };
+        btns.appendChild(b);
+    };
+    add({ kind: 'motor', face: 0 }, '+ 馬達模組');
+    Object.entries(PART_LIBRARY.connectors).forEach(([k, v]) => { if (k !== 'direct') add({ kind: 'connector', key: k }, '+ ' + v.name); });
+    Object.entries(PART_LIBRARY.endEffectors).forEach(([k, v]) => { if (k !== 'none') add({ kind: 'ee', key: k }, '+ ' + v.name + '(結束)'); });
+}
 
 function buildSliders() {
-    slidersEl.innerHTML = '';
-    assembly.motors.forEach((_, i) => {
+    slidersEl.innerHTML = thetas.length ? '' : '<div class="note">還沒有馬達</div>';
+    thetas.forEach((_, i) => {
         const w = document.createElement('div'); w.className = 'slider';
         w.innerHTML = `<div class="lbl"><span>馬達${i + 1}</span><span id="sv${i}">${thetas[i].toFixed(1)}°</span></div>
                        <input id="s${i}" type="range" min="-120" max="120" step="1" value="${thetas[i]}">`;
         slidersEl.appendChild(w);
-        w.querySelector('input').oninput = e => { thetas[i] = +e.target.value; update(false); };
+        w.querySelector('input').oninput = e => { thetas[i] = +e.target.value; update(); };
     });
 }
 function syncSliders() {
@@ -204,24 +263,19 @@ function syncSliders() {
         if (s) s.value = t; if (v) v.innerText = t.toFixed(1) + '°';
     });
 }
+function refreshAll() { ikTarget = null; buildChain(); buildSliders(); update(); }
 
-motorCountSel.onchange = () => {
-    const n = +motorCountSel.value;
-    while (assembly.motors.length < n) assembly.motors.push({ face: 1, connector: 'short' });
-    assembly.motors.length = n;
-    thetas = Array.from({ length: n }, (_, i) => thetas[i] || 0);
-    buildAssemblyRows(); buildSliders(); update();
-};
 document.getElementById('presetCurrent').onclick = () => {
     assembly = JSON.parse(JSON.stringify(CURRENT_ARM_ASSEMBLY));
-    thetas = assembly.motors.map(() => 0); motorCountSel.value = assembly.motors.length;
-    ikTarget = null; buildAssemblyRows(); buildSliders(); update();
+    thetas = new Array(motorCount(assembly)).fill(0);
+    refreshAll();
 };
-document.getElementById('zeroBtn').onclick = () => { thetas = thetas.map(() => 0); syncSliders(); update(false); };
+document.getElementById('clearBtn').onclick = () => { assembly = { parts: [] }; thetas = []; refreshAll(); };
+document.getElementById('zeroBtn').onclick = () => { thetas = thetas.map(() => 0); syncSliders(); update(); };
 
 const f1 = v => (Math.abs(v) < 0.05 ? 0 : v).toFixed(1);
 const f3 = v => (Math.abs(v) < 5e-4 ? 0 : v).toFixed(3);
-function update(rebuildUI = true) {
+function update() {
     const fk = modularFK(assembly, thetas);
     drawArm(fk);
     let s = `末端 (離地)  X ${f1(fk.pos[0])}  Y ${f1(fk.pos[1])}  Z ${f1(fk.pos[2] + Z_GROUND)}\n`;
@@ -244,6 +298,7 @@ document.getElementById('ikFromTip').onclick = () => {
     ['dX', 'dY', 'dZ'].forEach((id, k) => document.getElementById(id).value = fk.dir[k].toFixed(3));
 };
 document.getElementById('ikBtn').onclick = () => {
+    if (!motorCount(assembly)) { document.getElementById('ikResult').innerHTML = '<span class="bad">還沒有馬達,無法求解</span>'; return; }
     const v = id => +document.getElementById(id).value;
     const pos = [v("ikX"), v("ikY"), v("ikZ") - Z_GROUND];
     const dir = useDir.checked ? [v("dX"), v("dY"), v("dZ")] : null;
@@ -260,7 +315,7 @@ document.getElementById('ikBtn').onclick = () => {
     s += `角度 [${r.thetas.map(v => v.toFixed(1)).join(', ')}]`;
     el.innerHTML = s;
     thetas = r.thetas.slice();
-    update(false);
+    update();
 };
 
 document.getElementById('toggle').onclick = () => document.getElementById('panel').classList.toggle('hidden');
@@ -270,7 +325,7 @@ window.addEventListener('resize', () => {
 });
 (function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
 
-buildAssemblyRows(); buildSliders(); update();
+refreshAll();
 </script>
 </body>
 </html>
