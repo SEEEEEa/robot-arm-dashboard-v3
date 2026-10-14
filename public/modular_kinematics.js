@@ -62,7 +62,8 @@ const PART_LIBRARY = {
         direct: { name: '直接連接', T: mkIdentity(),                              path: [] },
         short:  { name: '短轉接頭', T: mkMul(mkTr(0, 0, 28), mkRz(180)),           path: [[0,0,0],[0,0,28]] },
         rod2:   { name: '延長桿2',  T: mkChain(mkTr(68, 0, 85), mkRy(90), mkRz(180)), path: [[0,0,0],[0,0,85],[68,0,85]] },
-        rod:    { name: '延長桿',   T: mkTr(116, 0, 101.3),                        path: [[0,0,0],[0,0,52],[116,0,52],[116,0,101.3]] },
+        rod:    { name: '延長桿',   T: mkMul(mkTr(116, 0, 101.3), mkRz(180)),      path: [[0,0,0],[0,0,52],[116,0,52],[116,0,101.3]] },
+        rod3:   { name: '延長桿3',  T: mkMul(mkTr(0, 0, 80), mkRz(90)),             path: [[0,0,0],[0,0,80]] },
     },
     endEffectors: {
         gripper: { name: '夾爪', T: mkTr(0, 0, 125.4), path: [[0,0,0],[0,0,125.4]] },
