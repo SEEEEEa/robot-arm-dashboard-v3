@@ -62,7 +62,8 @@
     <div id="readout"></div>
 
     <h3>4. 逆向運動學(DLS 數值解)</h3>
-    <div class="note">Z 為離地高度(= 數學座標 + 215)。少於 5 顆馬達時自動只求位置。</div>
+    <div class="note">Z 為離地高度(= 數學座標 + 215)。如果這個組法沒辦法同時控制位置和方向,會自動改成「位置優先、方向盡量接近」,並顯示方向差了幾度。</div>
+    <div id="dofInfo" class="note" style="margin-top:4px;"></div>
     <div class="grid3" style="margin:6px 0;">
         <label>X<input id="ikX" type="number" value="300"></label>
         <label>Y<input id="ikY" type="number" value="0"></label>
@@ -204,7 +205,7 @@ function buildChain() {
             fs.title = '下一個零件接在這顆馬達的哪一面';
             Object.entries(PART_LIBRARY.motor.faces).forEach(([k, v]) => fs.add(new Option(`往下接${v.name}`, k)));
             fs.value = part.face;
-            fs.onchange = () => { part.face = +fs.value; update(); };
+            fs.onchange = () => { part.face = +fs.value; updateDOF(); update(); };
             card.appendChild(fs);
         }
         const x = document.createElement('button'); x.className = 'x'; x.innerText = '✕'; x.title = '拿掉這個零件';
@@ -263,7 +264,20 @@ function syncSliders() {
         if (s) s.value = t; if (v) v.innerText = t.toFixed(1) + '°';
     });
 }
-function refreshAll() { ikTarget = null; buildChain(); buildSliders(); update(); }
+let currentDOF = { motors: 0, posDOF: 0, dirDOF: 0, fullControl: false };
+function updateDOF() {
+    currentDOF = analyzeDOF(assembly);
+    const d = currentDOF, el = document.getElementById('dofInfo');
+    if (!d.motors) { el.innerHTML = ''; return; }
+    const lost = d.motors - d.posDOF - d.dirDOF;
+    el.innerHTML = `自由度分析:馬達 ${d.motors} 顆 → 位置 <b>${d.posDOF}</b> 個、方向 <b>${d.dirDOF}</b> 個` +
+        (lost > 0 ? `(有 ${lost} 顆的效果跟別顆重疊,例如轉軸共線)` : '') + '<br>' +
+        (d.fullControl ? '<span class="ok">✔ 可以同時控制位置和方向</span>'
+         : d.posDOF < 3 ? '<span class="bad">位置只能在一個曲面/曲線上移動,很多點到不了;方向不能指定</span>'
+         : d.dirDOF === 0 ? '<span class="bad">只能控制位置,方向完全由位置決定</span>'
+         : '<span class="bad">位置可控,方向只能調整一部分(通常是仰角),只能盡量接近</span>');
+}
+function refreshAll() { ikTarget = null; buildChain(); buildSliders(); updateDOF(); update(); }
 
 document.getElementById('presetCurrent').onclick = () => {
     assembly = JSON.parse(JSON.stringify(CURRENT_ARM_ASSEMBLY));
@@ -304,14 +318,20 @@ document.getElementById('ikBtn').onclick = () => {
     const dir = useDir.checked ? [v("dX"), v("dY"), v("dZ")] : null;
     ikTarget = pos;
     const t0 = performance.now();
-    const r = modularIK(assembly, pos, dir, { warmStart: thetas });
+    const r = modularIK(assembly, pos, dir, { warmStart: thetas, dof: currentDOF });
     const ms = performance.now() - t0;
     const el = document.getElementById('ikResult');
     const fk = modularFK(assembly, r.thetas);
     const pErr = Math.hypot(...fk.pos.map((v, k) => v - pos[k]));
-    let s = `<span class="${r.converged ? 'ok' : 'bad'}">${r.converged ? '✔ 收斂' : '✘ 未收斂(顯示最接近的姿態)'}</span>\n`;
-    s += `模式 ${r.mode === 'position' ? '只求位置' : '位置+方向'}${dir && r.mode === 'position' ? '(馬達少於5顆,忽略方向)' : ''}\n`;
-    s += `迭代 ${r.iterations} 次,耗時 ${ms.toFixed(0)} ms\n位置誤差 ${pErr.toFixed(2)} mm\n`;
+    const MODE = { 'position': '只求位置', 'position+direction': '位置+方向 都達成', 'position-priority': '位置優先,方向盡量接近' };
+    let s = `<span class="${r.converged ? 'ok' : 'bad'}">${r.converged ? '✔ 位置到達' : '✘ 位置到不了(顯示最接近的姿態)'}</span>\n`;
+    s += `模式 ${MODE[r.mode] || r.mode}\n`;
+    s += `位置誤差 ${pErr.toFixed(2)} mm\n`;
+    if (dir) {
+        const de = r.dirErrDeg;
+        s += `<span class="${de < 0.5 ? 'ok' : 'bad'}">方向誤差 ${de.toFixed(2)}°</span>${r.mode === 'position-priority' && de >= 0.5 ? (currentDOF.fullControl ? '(這個方向在這個位置到不了)' : '(這個組法的自由度不夠,無法完全對準)') : ''}\n`;
+    }
+    s += `迭代 ${r.iterations} 次,耗時 ${ms.toFixed(0)} ms\n`;
     s += `角度 [${r.thetas.map(v => v.toFixed(1)).join(', ')}]`;
     el.innerHTML = s;
     thetas = r.thetas.slice();

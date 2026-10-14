@@ -145,8 +145,8 @@ function modularFK(assembly, thetas) {
 }
 
 // ---------- 通用 DLS 數值逆向運動學 ----------
-// 關節數 n = 序列裡的馬達數,自動決定模式:
-//   n >= 5 且有給 targetDir → 位置+方向(6維誤差);否則 → 只做位置(3維誤差)
+// modularIKAttempt:單次 DLS(posOnly=true 只算位置3維,否則位置+方向6維)
+// 模式選擇在後面的 modularIK 裡,依自由度分析自動決定
 const MK_ORIENT_WEIGHT = 120;
 const MK_JOINT_LIMIT = [-120, 120];
 
@@ -209,26 +209,180 @@ function modularIKAttempt(assembly, init, targetVec, posOnly, opts = {}) {
     return { thetas: th, errNorm: errN, iterations: iters, converged: errN <= tol };
 }
 
+// ---------- 自由度分析 ----------
+// 不只數馬達顆數,而是看這個組法的 Jacobian 實際有幾個有效方向:
+//   任務 = 位置3維 + 方向2維(方向是單位向量,只有2個獨立量;夾爪滾轉不算)
+//   在多組隨機姿態下算奇異值,取最大的有效秩(避開剛好落在奇異姿態的情況)
+// 例:兩顆馬達轉軸共線時,效果重疊,有效自由度會比馬達數少
+function mkSymEig(A) { // 對稱矩陣特徵值(Jacobi 旋轉法),n ≤ 5 很快
+    const n = A.length, M = A.map(r => r.slice());
+    for (let sweep = 0; sweep < 60; sweep++) {
+        let off = 0;
+        for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) off += M[i][j] * M[i][j];
+        if (off < 1e-20) break;
+        for (let p = 0; p < n; p++) for (let q = p + 1; q < n; q++) {
+            if (Math.abs(M[p][q]) < 1e-15) continue;
+            const th = 0.5 * Math.atan2(2 * M[p][q], M[q][q] - M[p][p]), c = Math.cos(th), s = Math.sin(th);
+            for (let k = 0; k < n; k++) { const kp = M[k][p], kq = M[k][q]; M[k][p] = c * kp - s * kq; M[k][q] = s * kp + c * kq; }
+            for (let k = 0; k < n; k++) { const pk = M[p][k], qk = M[q][k]; M[p][k] = c * pk - s * qk; M[q][k] = s * pk + c * qk; }
+        }
+    }
+    return M.map((r, i) => r[i]);
+}
+function mkSingularValues(J) { // J: m×n → 奇異值(由大到小)
+    const n = J[0].length, m = J.length;
+    const JtJ = Array.from({ length: n }, (_, a) => Array.from({ length: n }, (_, b) => { let s = 0; for (let k = 0; k < m; k++) s += J[k][a] * J[k][b]; return s; }));
+    return mkSymEig(JtJ).map(v => Math.sqrt(Math.max(0, v))).sort((x, y) => y - x);
+}
+function mkRank(J, rel = 1e-3) {
+    if (!J.length || !J[0].length) return 0;
+    const sv = mkSingularValues(J); if (sv[0] < 1e-9) return 0;
+    return sv.filter(v => v > rel * sv[0]).length;
+}
+// 5×n 任務 Jacobian:[位置(mm); 方向切平面兩分量 × MK_ORIENT_WEIGHT],中央差分
+function mkTaskJacobian(assembly, thetas) {
+    const n = thetas.length, h = 0.01, f0 = modularFK(assembly, thetas), d0 = f0.dir;
+    const ref = Math.abs(d0[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+    const cross = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+    let u = cross(d0, ref); const ul = mkNorm(u); u = u.map(v => v / ul);
+    const w = cross(d0, u);
+    const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+    const Jp = [[], [], []], Jd = [[], []];
+    for (let j = 0; j < n; j++) {
+        const tp = thetas.slice(), tm = thetas.slice(); tp[j] += h; tm[j] -= h;
+        const fp = modularFK(assembly, tp), fm = modularFK(assembly, tm);
+        const hr = 2 * h * Math.PI / 180; // 對弧度微分,讓方向的單位是 rad
+        for (let k = 0; k < 3; k++) Jp[k][j] = (fp.pos[k] - fm.pos[k]) / (2 * h);
+        const dd = [0, 1, 2].map(k => (fp.dir[k] - fm.dir[k]) / hr);
+        Jd[0][j] = dot(dd, u) * MK_ORIENT_WEIGHT * Math.PI / 180;
+        Jd[1][j] = dot(dd, w) * MK_ORIENT_WEIGHT * Math.PI / 180;
+    }
+    return { Jp, Jd, J: [...Jp, ...Jd] };
+}
+function analyzeDOF(assembly, samples = 12) {
+    const n = motorCount(assembly);
+    if (n === 0) return { motors: 0, posDOF: 0, dirDOF: 0, fullControl: false };
+    let posRank = 0, totalRank = 0, seed = 12345;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+    for (let k = 0; k < samples; k++) {
+        const th = Array.from({ length: n }, () => rnd() * 200 - 100);
+        const { Jp, J } = mkTaskJacobian(assembly, th);
+        posRank = Math.max(posRank, mkRank(Jp));
+        totalRank = Math.max(totalRank, mkRank(J));
+    }
+    return { motors: n, posDOF: posRank, dirDOF: totalRank - posRank, fullControl: posRank === 3 && totalRank === 5 };
+}
+
+// ---------- 位置優先的 IK(方向盡量接近) ----------
+// 主任務:位置誤差 → 0;次任務:在"不影響位置"的空間(零空間)裡,讓方向盡量接近
+//   Δθ = Jp⁺·ep + N·(Jd·N)⁺·(ed − Jd·Jp⁺·ep),  N = I − Jp⁺·Jp   (⁺ 為阻尼偽逆)
+function mkDampedPinv(J, lam) { // n×m: (JᵀJ + λ²I)⁻¹ Jᵀ
+    const m = J.length, n = J[0].length;
+    const A = Array.from({ length: n }, (_, a) => Array.from({ length: n }, (_, b) => {
+        let s = 0; for (let k = 0; k < m; k++) s += J[k][a] * J[k][b]; return s + (a === b ? lam * lam : 0); }));
+    const P = Array.from({ length: n }, () => new Array(m).fill(0));
+    for (let k = 0; k < m; k++) {
+        const col = mkSolveLinear(A, Array.from({ length: n }, (_, a) => J[k][a]));
+        if (!col) return null;
+        for (let a = 0; a < n; a++) P[a][k] = col[a];
+    }
+    return P;
+}
+const mkMatVec = (M, v) => M.map(r => r.reduce((s, x, i) => s + x * v[i], 0));
+const mkMatMul = (A, B) => A.map(r => B[0].map((_, j) => r.reduce((s, x, k) => s + x * B[k][j], 0)));
+function mkAngleDeg(a, b) {
+    const c = (a[0]*b[0] + a[1]*b[1] + a[2]*b[2]) / ((mkNorm(a) || 1) * (mkNorm(b) || 1));
+    return Math.acos(Math.max(-1, Math.min(1, c))) * 180 / Math.PI;
+}
+
+function modularIKPriorityAttempt(assembly, init, targetPos, targetDir, opts = {}) {
+    const n = init.length, tolP = opts.tol ?? 0.1, maxIter = opts.maxIter ?? 120;
+    const td = targetDir.map(v => v / (mkNorm(targetDir) || 1));
+    const evalTh = th => { const f = modularFK(assembly, th); return { th, f, pe: mkNorm(targetPos.map((v, k) => v - f.pos[k])), de: mkAngleDeg(f.dir, td) }; };
+    // 把姿態拉回目標位置(只修位置,DLS 最小改變量,方向幾乎不受影響)
+    const fixPos = (th, it) => modularIKAttempt(assembly, th, targetPos.slice(), true, { tol: tolP * 0.5, maxIter: it }).thetas;
+
+    // 階段A:先用穩定的位置DLS把位置做到
+    let cur = evalTh(fixPos(init, 100));
+    let iters = 0;
+    if (cur.pe > tolP) return { thetas: cur.th, posErr: cur.pe, dirErrDeg: cur.de, iterations: 100, converged: false };
+
+    // 階段B:在不動到位置的空間(零空間)裡轉,讓方向越來越接近;每步之後再把位置拉回來
+    let lam = 1, stall = 0;
+    while (iters < maxIter) {
+        iters++;
+        const th = cur.th;
+        const { Jp } = mkTaskJacobian(assembly, th);
+        const h = 0.05, Jd = [[], [], []];
+        for (let j = 0; j < n; j++) { const t2 = th.slice(); t2[j] += h; const d2 = modularFK(assembly, t2).dir;
+            for (let k = 0; k < 3; k++) Jd[k][j] = (d2[k] - cur.f.dir[k]) / h * MK_ORIENT_WEIGHT; }
+        const ed = td.map((v, k) => (v - cur.f.dir[k]) * MK_ORIENT_WEIGHT);
+        const JpP = mkDampedPinv(Jp, 0.01); if (!JpP) break;
+        const JpPJp = mkMatMul(JpP, Jp);
+        const N = JpPJp.map((r, a) => r.map((x, b) => (a === b ? 1 : 0) - x));
+        const JdNP = mkDampedPinv(mkMatMul(Jd, N), lam); if (!JdNP) break;
+        let dth = mkMatVec(N, mkMatVec(JdNP, ed));
+        const mx = Math.max(...dth.map(Math.abs)); if (mx > 15) dth = dth.map(v => v * 15 / mx);
+        if (mx < 1e-6) break;
+        let cand = th.map((v, j) => Math.max(MK_JOINT_LIMIT[0], Math.min(MK_JOINT_LIMIT[1], v + dth[j])));
+        let c = evalTh(cand);
+        if (c.pe > tolP) c = evalTh(fixPos(cand, 15));
+        if (c.pe <= tolP && c.de < cur.de - 1e-6) {
+            stall = (cur.de - c.de) < 1e-3 ? stall + 1 : 0;
+            cur = c; lam = Math.max(lam * 0.7, 0.01);
+            if (cur.de < 0.05 || stall >= 5) break;
+        } else { lam *= 2.5; if (lam > 1e5) break; }
+    }
+    return { thetas: cur.th, posErr: cur.pe, dirErrDeg: cur.de, iterations: iters + 100, converged: cur.pe <= tolP };
+}
+
 // targetPos:相對底座插孔的座標(mm);targetDir:可省略
+// 回傳 mode:
+//   'position+direction' 位置與方向都達成
+//   'position-priority'  方向無法完全達成(自由度不夠或目標到不了),位置優先、方向盡量接近
+//   'position'           只求位置(沒給方向)
 function modularIK(assembly, targetPos, targetDir, opts = {}) {
     const n = motorCount(assembly);
-    if (n === 0) return { thetas: [], errNorm: Infinity, iterations: 0, converged: false, mode: 'none' };
-    const posOnly = !(targetDir && n >= 5);
-    let targetVec = targetPos.slice();
-    if (!posOnly) { const dl = mkNorm(targetDir) || 1; targetVec = [...targetPos, ...targetDir.map(v => v / dl * MK_ORIENT_WEIGHT)]; }
+    if (n === 0) return { thetas: [], errNorm: Infinity, posErr: Infinity, iterations: 0, converged: false, mode: 'none' };
+    const dof = opts.dof || analyzeDOF(assembly);
     const seeds = [
         opts.warmStart,
         new Array(n).fill(0),
         [30, -30, 30, 0, -30], [-30, 40, -40, 20, 30], [10, -60, 60, -10, -20], [0, 60, -60, 0, 40],
     ].filter(Boolean).map(s => Array.from({ length: n }, (_, j) => s[j] || 0));
-    let best = null;
-    for (const s of seeds) {
-        const r = modularIKAttempt(assembly, s, targetVec, posOnly, opts);
-        if (!best || r.errNorm < best.errNorm) best = r;
-        if (r.converged) break;
+    const finish = (r, mode) => {
+        const f = modularFK(assembly, r.thetas);
+        r.posErr = mkNorm(targetPos.map((v, k) => v - f.pos[k]));
+        r.dirErrDeg = targetDir ? mkAngleDeg(f.dir, targetDir) : null;
+        r.mode = mode; r.dof = dof; return r;
+    };
+
+    // 1) 沒給方向 → 只求位置
+    if (!targetDir) {
+        let best = null;
+        for (const s of seeds) { const r = modularIKAttempt(assembly, s, targetPos.slice(), true, opts); if (!best || r.errNorm < best.errNorm) best = r; if (r.converged) break; }
+        return finish(best, 'position');
     }
-    best.mode = posOnly ? 'position' : 'position+direction';
-    return best;
+    // 2) 自由度足夠 → 先試位置+方向同時達成
+    const compromise = []; // 位置+方向折衷解,方向通常已經很接近,拿來當位置優先的起點
+    {
+        const dl = mkNorm(targetDir) || 1, tv = [...targetPos, ...targetDir.map(v => v / dl * MK_ORIENT_WEIGHT)];
+        for (const s of seeds) {
+            const r = modularIKAttempt(assembly, s, tv, false, opts);
+            if (dof.fullControl && r.converged) return finish(r, 'position+direction');
+            compromise.push(r.thetas);
+            if (!dof.fullControl && compromise.length >= 3) break;
+        }
+    }
+    // 3) 做不到 → 位置優先、方向盡量接近
+    let best = null;
+    for (const s of [...compromise, ...seeds]) {
+        const r = modularIKPriorityAttempt(assembly, s, targetPos, targetDir, opts);
+        if (!best || (r.converged && !best.converged) || (r.converged === best.converged && (r.converged ? r.dirErrDeg < best.dirErrDeg : r.posErr < best.posErr))) best = r;
+        if (r.converged && r.dirErrDeg < 0.1) break;
+    }
+    best.errNorm = best.posErr;
+    return finish(best, 'position-priority');
 }
 
-if (typeof module !== 'undefined') module.exports = { PART_LIBRARY, CURRENT_ARM_ASSEMBLY, MAX_MOTORS, motorCount, canAppend, modularFK, modularIK, mkMul, mkTr, mkRz, mkRy, mkChain };
+if (typeof module !== 'undefined') module.exports = { PART_LIBRARY, CURRENT_ARM_ASSEMBLY, MAX_MOTORS, motorCount, canAppend, modularFK, modularIK, analyzeDOF, mkMul, mkTr, mkRz, mkRy, mkChain };
