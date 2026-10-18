@@ -56,7 +56,7 @@
 
     <h3>2. 手動關節角度</h3>
     <div id="sliders"></div>
-    <div class="row"><button id="zeroBtn" class="ghost">全部歸零</button></div>
+    <div class="row"><button id="zeroBtn" class="ghost">全部歸零(升降模組回最高點)</button></div>
 
     <h3>3. 目前狀態(正向運動學)</h3>
     <div id="readout"></div>
@@ -87,7 +87,7 @@ const Z_GROUND = PART_LIBRARY.base.groundHeight;
 
 // ---------- 狀態 ----------
 let assembly = JSON.parse(JSON.stringify(CURRENT_ARM_ASSEMBLY));
-let thetas = new Array(motorCount(assembly)).fill(0);
+let thetas = jointInfo(assembly).map(j => j.home);
 let ikTarget = null;
 
 // ---------- 3D 場景(直接用 Z 朝上的世界座標) ----------
@@ -153,6 +153,17 @@ function drawArm(fk) {
         const ax = new THREE.Vector3(Trot[2], Trot[6], Trot[10]);
         armGroup.add(new THREE.ArrowHelper(ax, new THREE.Vector3(Trot[3], Trot[7], Trot[11]), 110, 0xf9e2af, 14, 8));
     });
+    // 直線模組:支架盒 + 齒輪A + 齒輪BC + 齒條 + 齒條末端插孔方塊(位置用 STL 量的,畫個大概)
+    fk.linearFrames.forEach(L => {
+        const T = toMatrix4(L.Tin), d = L.d, lib = PART_LIBRARY.linearModules[L.key];
+        const addLocal = (geo, pos, mat, rotX) => { const m = new THREE.Mesh(geo, mat); if (rotX) m.rotation.x = rotX; m.position.set(...pos); const g = new THREE.Group(); g.add(m); g.applyMatrix4(T); armGroup.add(g); return m; };
+        addLocal(new THREE.BoxGeometry(78, 78, 50), [0, 0, 30], mat.body);                                  // 支架盒(內含馬達)
+        addLocal(new THREE.CylinderGeometry(38.75, 38.75, 10, 40), [0, 0, 73], mat.pivot, Math.PI / 2);      // 齒輪A
+        addLocal(new THREE.CylinderGeometry(23.75, 23.75, 28, 32), [-50, 0, 81], mat.pivot, Math.PI / 2);    // 齒輪BC
+        addLocal(new THREE.BoxGeometry(5, lib.rackLength, 15), [-78.35, -21 + lib.rackLength / 2 - d, 86.9], mat.c); // 齒條
+        addLocal(new THREE.BoxGeometry(57.5, 28, 57.5), [-137.25, 3.5 - d, 86.35], mat.c);                  // 齒條末端方塊
+        addLocal(new THREE.BoxGeometry(70, 8, 8), [-100, 0, 86.35], mat.c);                                  // 支架手臂(示意)
+    });
     // 連接件與末端:骨架線
     const sk = fk.skeleton;
     for (let k = 1; k < sk.length; k++) {
@@ -184,13 +195,14 @@ const slidersEl = document.getElementById('sliders');
 
 function partName(part) {
     if (part.kind === 'motor') return PART_LIBRARY.motor.name;
+    if (part.kind === 'linear') return PART_LIBRARY.linearModules[part.key].name;
     if (part.kind === 'ee') return PART_LIBRARY.endEffectors[part.key].name;
     return PART_LIBRARY.connectors[part.key].name;
 }
 // 零件在序列中的位置 → 它是第幾顆馬達(不是馬達則回傳 -1)
 function motorIndexOf(pi) {
-    if (assembly.parts[pi].kind !== 'motor') return -1;
-    return assembly.parts.slice(0, pi).filter(p => p.kind === 'motor').length;
+    if (!isJoint(assembly.parts[pi])) return -1;
+    return assembly.parts.slice(0, pi).filter(isJoint).length;
 }
 
 function buildChain() {
@@ -198,7 +210,7 @@ function buildChain() {
     assembly.parts.forEach((part, pi) => {
         const card = document.createElement('div'); card.className = 'card';
         const mi = motorIndexOf(pi);
-        const tag = part.kind === 'motor' ? `<span class="tag m">馬達${mi + 1}</span>` : part.kind === 'ee' ? '<span class="tag e">末端</span>' : '<span class="tag c">連接件</span>';
+        const tag = isJoint(part) ? `<span class="tag m">馬達${mi + 1}</span>` : part.kind === 'ee' ? '<span class="tag e">末端</span>' : '<span class="tag c">連接件</span>';
         card.innerHTML = `<span class="idx">${pi + 1}</span><span class="name">${tag}${partName(part)}</span>`;
         if (part.kind === 'motor') {
             const fs = document.createElement('select');
@@ -210,7 +222,7 @@ function buildChain() {
         }
         const x = document.createElement('button'); x.className = 'x'; x.innerText = '✕'; x.title = '拿掉這個零件';
         x.onclick = () => {
-            if (part.kind === 'motor') thetas.splice(mi, 1);
+            if (isJoint(part)) thetas.splice(mi, 1);
             assembly.parts.splice(pi, 1);
             refreshAll();
         };
@@ -230,38 +242,46 @@ function buildNextBox() {
     }
     let where = '底座插孔';
     if (last && last.kind === 'motor') where = `馬達${motorCount(assembly)} 的${PART_LIBRARY.motor.faces[last.face].name}`;
+    else if (last && last.kind === 'linear') where = `${partName(last)} 的齒條插孔`;
     else if (last) where = `${partName(last)} 的出口`;
     hint.innerHTML = `下一個要接什麼?(接在 <b>${where}</b>)`;
     const add = (part, label) => {
         const b = document.createElement('button'); b.className = 'ghost'; b.innerText = label;
         b.disabled = !canAppend(assembly, part);
-        if (part.kind === 'motor' && b.disabled) b.innerText += `(已達${MAX_MOTORS}顆)`;
+        if (isJoint(part) && b.disabled) b.innerText += `(已達${MAX_MOTORS}顆)`;
         b.onclick = () => {
             assembly.parts.push(part);
             if (part.kind === 'motor') thetas.push(0);
+            if (part.kind === 'linear') thetas.push(PART_LIBRARY.linearModules[part.key].homeAngle);
             refreshAll();
         };
         btns.appendChild(b);
     };
     add({ kind: 'motor', face: 0 }, '+ 馬達模組');
     Object.entries(PART_LIBRARY.connectors).forEach(([k, v]) => { if (k !== 'direct') add({ kind: 'connector', key: k }, '+ ' + v.name); });
+    Object.entries(PART_LIBRARY.linearModules).forEach(([k, v]) => add({ kind: 'linear', key: k }, '+ ' + v.name));
     Object.entries(PART_LIBRARY.endEffectors).forEach(([k, v]) => { if (k !== 'none') add({ kind: 'ee', key: k }, '+ ' + v.name + '(結束)'); });
 }
 
 function buildSliders() {
     slidersEl.innerHTML = thetas.length ? '' : '<div class="note">還沒有馬達</div>';
+    const info = jointInfo(assembly);
     thetas.forEach((_, i) => {
-        const w = document.createElement('div'); w.className = 'slider';
-        w.innerHTML = `<div class="lbl"><span>馬達${i + 1}</span><span id="sv${i}">${thetas[i].toFixed(1)}°</span></div>
-                       <input id="s${i}" type="range" min="-120" max="120" step="1" value="${thetas[i]}">`;
+        const j = info[i], w = document.createElement('div'); w.className = 'slider';
+        const label = j.kind === 'linear' ? `馬達${i + 1}(${PART_LIBRARY.linearModules[j.key].name})` : `馬達${i + 1}`;
+        w.innerHTML = `<div class="lbl"><span>${label}</span><span id="sv${i}"></span></div>
+                       <input id="s${i}" type="range" min="${j.limit[0]}" max="${j.limit[1]}" step="1" value="${thetas[i]}">`;
         slidersEl.appendChild(w);
         w.querySelector('input').oninput = e => { thetas[i] = +e.target.value; update(); };
     });
+    syncSliders();
 }
 function syncSliders() {
     thetas.forEach((t, i) => {
         const s = document.getElementById('s' + i), v = document.getElementById('sv' + i);
-        if (s) s.value = t; if (v) v.innerText = t.toFixed(1) + '°';
+        if (s) s.value = t;
+        if (v) { const j = jointInfo(assembly)[i];
+            v.innerText = j && j.kind === 'linear' ? `${t.toFixed(1)}°  → 下降 ${linearDisplacement(j.key, t).toFixed(1)} mm` : t.toFixed(1) + '°'; }
     });
 }
 let currentDOF = { motors: 0, posDOF: 0, dirDOF: 0, fullControl: false };
@@ -281,11 +301,11 @@ function refreshAll() { ikTarget = null; buildChain(); buildSliders(); updateDOF
 
 document.getElementById('presetCurrent').onclick = () => {
     assembly = JSON.parse(JSON.stringify(CURRENT_ARM_ASSEMBLY));
-    thetas = new Array(motorCount(assembly)).fill(0);
+    thetas = jointInfo(assembly).map(j => j.home);
     refreshAll();
 };
 document.getElementById('clearBtn').onclick = () => { assembly = { parts: [] }; thetas = []; refreshAll(); };
-document.getElementById('zeroBtn').onclick = () => { thetas = thetas.map(() => 0); syncSliders(); update(); };
+document.getElementById('zeroBtn').onclick = () => { thetas = jointInfo(assembly).map(j => j.home); syncSliders(); update(); };
 
 const f1 = v => (Math.abs(v) < 0.05 ? 0 : v).toFixed(1);
 const f3 = v => (Math.abs(v) < 5e-4 ? 0 : v).toFixed(3);
@@ -294,10 +314,12 @@ function update() {
     drawArm(fk);
     let s = `末端 (離地)  X ${f1(fk.pos[0])}  Y ${f1(fk.pos[1])}  Z ${f1(fk.pos[2] + Z_GROUND)}\n`;
     s += `末端方向    (${fk.dir.map(f3).join(', ')})\n\n`;
-    s += `轉軸點(數學座標)與轉軸方向:\n`;
-    fk.motorFrames.forEach((T, i) => {
-        s += `M${i + 1} (${f1(T[3])}, ${f1(T[7])}, ${f1(T[11])})  軸(${[T[2], T[6], T[10]].map(v => f1(v)).join(',')})\n`;
-    });
+    s += `關節(數學座標):\n`;
+    const rows = [];
+    fk.motorFrames.forEach((T, k) => rows[fk.motorFrameJoint[k]] = `M${fk.motorFrameJoint[k] + 1} 轉軸點 (${f1(T[3])}, ${f1(T[7])}, ${f1(T[11])})  軸(${[T[2], T[6], T[10]].map(v => f1(v)).join(',')})`);
+    fk.linearFrames.forEach(L => { const B = L.Tblock;
+        rows[L.motorIndex] = `M${L.motorIndex + 1} 升降 下降 ${f1(L.d)} mm,插孔 (${f1(B[3])}, ${f1(B[7])}, ${f1(B[11])}) 開口(${[B[2], B[6], B[10]].map(v => f1(v)).join(',')})`; });
+    s += rows.join('\n') + '\n';
     document.getElementById('readout').innerText = s;
     syncSliders();
 }

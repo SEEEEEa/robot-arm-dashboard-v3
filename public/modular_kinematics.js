@@ -68,6 +68,24 @@ const PART_LIBRARY = {
         scara1: { name: 'SCARA連接件1', T: mkMul(mkTr(0, 0, 128.5), mkRz(90)),        path: [[0,0,0],[0,0,128.5]] },
         scara2: { name: 'SCARA連接件2', T: mkMul(mkTr(-68, 0, 145), mkRy(-90)),       path: [[0,0,0],[0,0,145],[-68,0,145]] },
     },
+    // 直線模組:自帶一顆馬達,馬達轉動 → 齒輪 → 齒條平移(移動關節)
+    //   零件座標系同連接件:原點 = 插頭接合面中心,Z = 插入方向
+    //   T(θ) = Tr(offset + travelDir·d(θ)) · R,  d(θ) = mmPerDeg·(θ − topAngle)
+    linearModules: {
+        scaraZ: {
+            name: 'SCARA升降模組',
+            // 齒輪A 60齒(馬達) → 齒輪C 20齒(×3) ; 同軸齒輪B 36齒(節圓半徑22.5) → 齒條(模數1.25)
+            mmPerDeg: 3 * 22.5 * Math.PI / 180,   // ≈ 1.178 mm/度
+            topAngle: -120,                        // 齒條在最高點時的馬達角度(d = 0)
+            homeAngle: -120,                       // 歸零時的角度(這顆用特別ID,起始角度跟其他馬達不同)
+            limit: [-120, 120],                    // 之後視情況縮小,避免脫齒
+            offset: [-137.25, -10.5, 86.35],       // 最高點時:插頭接合面 → 齒條插孔中心
+            travelDir: [0, -1, 0],                 // d 增加 = 齒條往這個方向移動(往下)
+            R: mkRx(90),                           // 齒條插孔的朝向(開口朝齒條移動方向)
+            rackLength: 300,
+            path: [[0,0,0],[0,0,86.35],[-137.25,0,86.35]],
+        },
+    },
     endEffectors: {
         gripper: { name: '夾爪', T: mkTr(0, 0, 125.4), path: [[0,0,0],[0,0,125.4]] },
         none:    { name: '無',   T: mkIdentity(),      path: [] },
@@ -94,13 +112,21 @@ const CURRENT_ARM_ASSEMBLY = {
     ],
 };
 
-function motorCount(assembly) { return assembly.parts.filter(p => p.kind === 'motor').length; }
+const isJoint = p => p.kind === 'motor' || p.kind === 'linear';   // 會吃掉一個馬達角度的零件
+function motorCount(assembly) { return assembly.parts.filter(isJoint).length; }
+// 每個關節的角度範圍與歸零角度(依序對應 thetas)
+function jointInfo(assembly) {
+    return assembly.parts.filter(isJoint).map(p => p.kind === 'linear'
+        ? { kind: 'linear', key: p.key, limit: PART_LIBRARY.linearModules[p.key].limit.slice(), home: PART_LIBRARY.linearModules[p.key].homeAngle }
+        : { kind: 'motor', limit: MK_JOINT_LIMIT.slice(), home: 0 });
+}
+function linearDisplacement(key, theta) { const L = PART_LIBRARY.linearModules[key]; return L.mmPerDeg * (theta - L.topAngle); }
 
 // 下一個零件可不可以接上去(給介面用)
 function canAppend(assembly, part) {
     const last = assembly.parts[assembly.parts.length - 1];
     if (last && last.kind === 'ee') return false;
-    if (part.kind === 'motor' && motorCount(assembly) >= MAX_MOTORS) return false;
+    if (isJoint(part) && motorCount(assembly) >= MAX_MOTORS) return false;
     return true;
 }
 
@@ -110,7 +136,8 @@ function canAppend(assembly, part) {
 //   pos, dir      末端位置(相對底座插孔)與指向;沒有末端時 = 最後一個插孔
 //   T             末端完整矩陣
 //   openSocket    還沒接東西的插孔(下一個零件會接在這),已接末端則為 null
-//   motorFrames   每顆馬達"旋轉後"的座標系(畫body用)
+//   motorFrames   每顆旋轉馬達"旋轉後"的座標系(畫body用);motorFrameJoint[k] = 它是第幾個關節
+//   linearFrames  每個直線模組 {Tin 插頭座標系, Tblock 齒條插孔座標系, d 目前位移mm}
 //   inputFrames   每顆馬達 pivot 插入處的座標系(畫pivot用,不隨自己旋轉)
 //   partFrames    每個連接件/末端的插頭座標系 {kind, key, partIndex, T}(畫連接件STL用)
 //   skeleton      骨架點串列(世界座標),每點附 owner(屬於哪個剛體),用來畫線和做碰撞膠囊
@@ -118,7 +145,7 @@ function modularFK(assembly, thetas) {
     const lib = PART_LIBRARY;
     let T = lib.base.T.slice();
     const skeleton = [{ p: mkPos(T), owner: 'base' }];
-    const motorFrames = [], inputFrames = [], partFrames = [];
+    const motorFrames = [], motorFrameJoint = [], inputFrames = [], partFrames = [], linearFrames = [];
     let mi = 0, endedWithEE = false;
 
     assembly.parts.forEach((part, pi) => {
@@ -127,10 +154,21 @@ function modularFK(assembly, thetas) {
             T = mkMul(T, mkTr(0, 0, lib.motor.inputToAxis));          // pivot接合面 → 旋轉點
             skeleton.push({ p: mkPos(T), owner: `m${mi}` });
             T = mkMul(T, mkRz(thetas[mi] || 0));                       // 旋轉
-            motorFrames.push(T.slice());
+            motorFrames.push(T.slice()); motorFrameJoint.push(mi);
             const face = lib.motor.faces[part.face ?? 0];               // 旋轉點 → 選用的面
             face.path.slice(1).forEach(p => skeleton.push({ p: mkApply(T, p), owner: `m${mi}` }));
             T = mkMul(T, face.T);
+            mi++;
+        } else if (part.kind === 'linear') {
+            const L = lib.linearModules[part.key];
+            const th = thetas[mi] ?? L.homeAngle;
+            const d = L.mmPerDeg * (th - L.topAngle);
+            const off = L.offset.map((v, k) => v + L.travelDir[k] * d);
+            linearFrames.push({ key: part.key, motorIndex: mi, partIndex: pi, Tin: T.slice(), d,
+                                Tblock: mkMul(T, mkMul(mkTr(...off), L.R)) });
+            L.path.slice(1).forEach(p => skeleton.push({ p: mkApply(T, p), owner: `m${mi}` }));
+            skeleton.push({ p: mkApply(T, off), owner: `m${mi}` });
+            T = mkMul(T, mkMul(mkTr(...off), L.R));
             mi++;
         } else {
             const def = part.kind === 'ee' ? lib.endEffectors[part.key] : lib.connectors[part.key];
@@ -144,7 +182,7 @@ function modularFK(assembly, thetas) {
 
     const d = mkAxisZ(T), dl = Math.hypot(...d) || 1;
     return { pos: mkPos(T), dir: d.map(v => v / dl), T, openSocket: endedWithEE ? null : T.slice(),
-             motorFrames, inputFrames, partFrames, skeleton };
+             motorFrames, motorFrameJoint, inputFrames, partFrames, linearFrames, skeleton };
 }
 
 // ---------- 通用 DLS 數值逆向運動學 ----------
@@ -182,6 +220,7 @@ function mkSolveLinear(A, b) { // 高斯消去(部分選主元),A 為 n×n
 function mkNorm(v) { return Math.hypot(...v); }
 
 function modularIKAttempt(assembly, init, targetVec, posOnly, opts = {}) {
+    const lim = jointInfo(assembly).map(j => j.limit);
     const n = motorCount(assembly), h = 0.05, tol = opts.tol ?? 0.1, maxIter = opts.maxIter ?? 100;
     let th = init.slice(), lam = 5, iters = 0;
     let out = mkOutputVec(assembly, th, posOnly);
@@ -203,7 +242,7 @@ function modularIKAttempt(assembly, init, targetVec, posOnly, opts = {}) {
         const g = Array.from({ length: n }, (_, a) => { let s = 0; for (let k = 0; k < m; k++) s += J[k][a] * err[k]; return s; });
         const dth = mkSolveLinear(A, g);
         if (!dth) break;
-        const cand = th.map((v, j) => Math.max(MK_JOINT_LIMIT[0], Math.min(MK_JOINT_LIMIT[1], v + dth[j])));
+        const cand = th.map((v, j) => Math.max(lim[j][0], Math.min(lim[j][1], v + dth[j])));
         const cOut = mkOutputVec(assembly, cand, posOnly);
         const cErr = targetVec.map((v, k) => v - cOut[k]), cN = mkNorm(cErr);
         if (cN < errN) { th = cand; out = cOut; err = cErr; errN = cN; lam = Math.max(lam * 0.7, 0.01); }
@@ -300,6 +339,7 @@ function mkAngleDeg(a, b) {
 
 function modularIKPriorityAttempt(assembly, init, targetPos, targetDir, opts = {}) {
     const n = init.length, tolP = opts.tol ?? 0.1, maxIter = opts.maxIter ?? 120;
+    const lim = jointInfo(assembly).map(j => j.limit);
     const td = targetDir.map(v => v / (mkNorm(targetDir) || 1));
     const evalTh = th => { const f = modularFK(assembly, th); return { th, f, pe: mkNorm(targetPos.map((v, k) => v - f.pos[k])), de: mkAngleDeg(f.dir, td) }; };
     // 把姿態拉回目標位置(只修位置,DLS 最小改變量,方向幾乎不受影響)
@@ -327,7 +367,7 @@ function modularIKPriorityAttempt(assembly, init, targetPos, targetDir, opts = {
         let dth = mkMatVec(N, mkMatVec(JdNP, ed));
         const mx = Math.max(...dth.map(Math.abs)); if (mx > 15) dth = dth.map(v => v * 15 / mx);
         if (mx < 1e-6) break;
-        let cand = th.map((v, j) => Math.max(MK_JOINT_LIMIT[0], Math.min(MK_JOINT_LIMIT[1], v + dth[j])));
+        let cand = th.map((v, j) => Math.max(lim[j][0], Math.min(lim[j][1], v + dth[j])));
         let c = evalTh(cand);
         if (c.pe > tolP) c = evalTh(fixPos(cand, 15));
         if (c.pe <= tolP && c.de < cur.de - 1e-6) {
@@ -352,7 +392,7 @@ function modularIK(assembly, targetPos, targetDir, opts = {}) {
         opts.warmStart,
         new Array(n).fill(0),
         [30, -30, 30, 0, -30], [-30, 40, -40, 20, 30], [10, -60, 60, -10, -20], [0, 60, -60, 0, 40],
-    ].filter(Boolean).map(s => Array.from({ length: n }, (_, j) => s[j] || 0));
+    ].filter(Boolean).map(s => { const L = jointInfo(assembly); return Array.from({ length: n }, (_, j) => Math.max(L[j].limit[0], Math.min(L[j].limit[1], s[j] || 0))); });
     const finish = (r, mode) => {
         const f = modularFK(assembly, r.thetas);
         r.posErr = mkNorm(targetPos.map((v, k) => v - f.pos[k]));
@@ -388,4 +428,4 @@ function modularIK(assembly, targetPos, targetDir, opts = {}) {
     return finish(best, 'position-priority');
 }
 
-if (typeof module !== 'undefined') module.exports = { PART_LIBRARY, CURRENT_ARM_ASSEMBLY, MAX_MOTORS, motorCount, canAppend, modularFK, modularIK, analyzeDOF, mkMul, mkTr, mkRz, mkRy, mkChain };
+if (typeof module !== 'undefined') module.exports = { PART_LIBRARY, CURRENT_ARM_ASSEMBLY, MAX_MOTORS, motorCount, jointInfo, linearDisplacement, canAppend, modularFK, modularIK, analyzeDOF, mkMul, mkTr, mkRz, mkRy, mkChain };
