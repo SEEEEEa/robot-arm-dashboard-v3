@@ -47,7 +47,7 @@
 
     <h3>1. 組裝</h3>
     <div class="note">從底座開始,一個一個往上接。每接一個,下面就會列出下一個可以接的零件;連接件可以連續接,馬達也可以直接接馬達。橘色圓環 = 下一個零件會接的位置。</div>
-    <div class="row" style="margin-top:6px;"><button id="presetCurrent" class="ghost">載入目前實體手臂</button><button id="clearBtn" class="ghost">清空重來</button></div>
+    <div class="row" style="margin-top:6px;"><button id="presetCurrent" class="ghost">載入目前實體手臂</button><button id="presetScara" class="ghost">載入 SCARA</button><button id="clearBtn" class="ghost">清空重來</button></div>
     <div id="chain"></div>
     <div id="nextBox">
         <div id="nextHint" class="note"></div>
@@ -299,6 +299,13 @@ function updateDOF() {
 }
 function refreshAll() { ikTarget = null; buildChain(); buildSliders(); updateDOF(); update(); }
 
+document.getElementById('presetScara').onclick = () => {
+    assembly = JSON.parse(JSON.stringify(SCARA_ASSEMBLY));
+    thetas = jointInfo(assembly).map(j => j.home);
+    refreshAll();
+    // SCARA 夾爪固定朝下:IK 預設改成不指定方向
+    document.getElementById('useDir').checked = false; document.getElementById('useDir').onchange();
+};
 document.getElementById('presetCurrent').onclick = () => {
     assembly = JSON.parse(JSON.stringify(CURRENT_ARM_ASSEMBLY));
     thetas = jointInfo(assembly).map(j => j.home);

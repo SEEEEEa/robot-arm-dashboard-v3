@@ -112,6 +112,16 @@ const CURRENT_ARM_ASSEMBLY = {
     ],
 };
 
+// SCARA 組法(使用者確認):兩顆直立轉軸 + 升降模組,夾爪朝下
+const SCARA_ASSEMBLY = {
+    parts: [
+        { kind: 'motor', face: 1 }, { kind: 'connector', key: 'scara2' },
+        { kind: 'motor', face: 1 }, { kind: 'connector', key: 'scara1' },
+        { kind: 'linear', key: 'scaraZ' },
+        { kind: 'ee', key: 'gripper' },
+    ],
+};
+
 const isJoint = p => p.kind === 'motor' || p.kind === 'linear';   // 會吃掉一個馬達角度的零件
 function motorCount(assembly) { return assembly.parts.filter(isJoint).length; }
 // 每個關節的角度範圍與歸零角度(依序對應 thetas)
@@ -428,4 +438,4 @@ function modularIK(assembly, targetPos, targetDir, opts = {}) {
     return finish(best, 'position-priority');
 }
 
-if (typeof module !== 'undefined') module.exports = { PART_LIBRARY, CURRENT_ARM_ASSEMBLY, MAX_MOTORS, motorCount, jointInfo, linearDisplacement, canAppend, modularFK, modularIK, analyzeDOF, mkMul, mkTr, mkRz, mkRy, mkChain };
+if (typeof module !== 'undefined') module.exports = { PART_LIBRARY, CURRENT_ARM_ASSEMBLY, SCARA_ASSEMBLY, MAX_MOTORS, motorCount, jointInfo, linearDisplacement, canAppend, modularFK, modularIK, analyzeDOF, mkMul, mkTr, mkRz, mkRy, mkChain };
