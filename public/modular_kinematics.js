@@ -62,7 +62,7 @@ const PART_LIBRARY = {
         direct: { name: '直接連接', T: mkIdentity(),                              path: [] },
         short:  { name: '短轉接頭', T: mkMul(mkTr(0, 0, 28), mkRz(180)),           path: [[0,0,0],[0,0,28]] },
         rod2:   { name: '延長桿2',  T: mkChain(mkTr(68, 0, 85), mkRy(90), mkRz(180)), path: [[0,0,0],[0,0,85],[68,0,85]] },
-        rod:    { name: '延長桿',   T: mkMul(mkTr(116, 0, 101.3), mkRz(180)),      path: [[0,0,0],[0,0,52],[116,0,52],[116,0,101.3]] },
+        rod:    { name: '延長桿',   T: mkMul(mkTr(116, 0, 101.3), mkRz(-90)),      path: [[0,0,0],[0,0,52],[116,0,52],[116,0,101.3]] }, // 新版:插孔轉向,讓夾爪換角度(原本 Rz(180))
         rod3:   { name: '延長桿3',  T: mkMul(mkTr(0, 0, 80), mkRz(90)),             path: [[0,0,0],[0,0,80]] },
         rod4:   { name: '延長桿4',  T: mkMul(mkTr(110, 0, 8), mkRx(180)),           path: [[0,0,0],[0,0,36],[110,0,36],[110,0,8]] }, // U形回折:出口朝回頭方向
         scara1: { name: 'SCARA連接件1', T: mkMul(mkTr(0, 0, 128.5), mkRz(90)),        path: [[0,0,0],[0,0,128.5]] },
