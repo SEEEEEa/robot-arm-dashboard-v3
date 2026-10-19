@@ -9,7 +9,11 @@
     * { box-sizing: border-box; }
     body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, "Noto Sans TC", sans-serif; font-size:13px; overflow:hidden; }
     #view { position:fixed; inset:0; }
-    #panel { position:fixed; top:10px; left:10px; bottom:10px; width:330px; max-width:calc(100vw - 20px); background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; overflow-y:auto; }
+    .panel { position:fixed; top:10px; bottom:10px; width:330px; max-width:calc(100vw - 20px); background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; overflow-y:auto; z-index:5; }
+    #panelLeft { left:10px; }
+    #panelRight { right:10px; }
+    h3.first { border-top:none; padding-top:0; margin-top:2px; }
+    #mobileBar { display:none; }
     h2 { font-size:15px; margin:0 0 4px; color:var(--accent); }
     h3 { font-size:13px; margin:14px 0 6px; color:var(--accent); border-top:1px solid var(--line); padding-top:10px; }
     .note { color:var(--sub); font-size:11px; line-height:1.5; }
@@ -34,7 +38,7 @@
     .grid3 input { width:100%; }
     #readout, #ikResult { font-family: ui-monospace, Consolas, monospace; font-size:11.5px; line-height:1.55; white-space:pre-wrap; }
     .ok { color:var(--ok); } .bad { color:var(--bad); }
-    #collBadge { position:fixed; top:12px; right:12px; padding:6px 12px; border-radius:8px; font-weight:bold; font-size:13px; z-index:4; }
+    #collBadge { position:fixed; top:12px; left:50%; transform:translateX(-50%); max-width:calc(100vw - 720px); padding:6px 14px; border-radius:8px; font-weight:bold; font-size:13px; z-index:4; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     #collBadge.safe { background:#1e1e2e; color:var(--ok); border:1px solid var(--ok); }
     #collBadge.hit { background:var(--bad); color:#111; }
     .hwBadge { display:inline-block; padding:3px 10px; border-radius:6px; font-weight:bold; font-size:12px; }
@@ -46,15 +50,22 @@
     button:disabled { opacity:0.4; cursor:not-allowed; }
     .mono { font-family: ui-monospace, Consolas, monospace; font-size:11.5px; line-height:1.5; color:var(--sub); white-space:pre-wrap; margin-top:4px; }
     .dirRow { display:grid; grid-template-columns: 56px 1fr 52px; gap:6px; align-items:center; margin-top:4px; }
-    #toggle { display:none; position:fixed; top:10px; right:10px; z-index:5; }
-    @media (max-width: 600px) { #collBadge { top:auto; bottom:12px; } #panel { top:52px; width:auto; right:10px; bottom:auto; max-height:55vh; } #toggle { display:block; } #panel.hidden { display:none; } }
+    #toggle { display:none; }
+    /* 窄螢幕(手機、平板直放):兩個面板平常收起來,用上方按鈕切換,一次只開一個 */
+    @media (max-width: 900px) {
+        #mobileBar { display:flex; justify-content:space-between; position:fixed; top:8px; left:8px; right:8px; z-index:6; pointer-events:none; }
+        #mobileBar button { pointer-events:auto; }
+        .panel { display:none; top:52px; bottom:auto; left:8px !important; right:8px !important; width:auto; max-height:62vh; }
+        .panel.open { display:block; }
+        #collBadge { top:auto; bottom:12px; max-width:calc(100vw - 24px); }
+    }
 </style>
 </head>
 <body>
 <div id="view"></div>
 <div id="collBadge"></div>
-<button id="toggle" class="ghost">面板</button>
-<div id="panel">
+<div id="mobileBar"><button id="openLeft" class="ghost">☰ 組裝 / 狀態</button><button id="openRight" class="ghost">控制 ☰</button></div>
+<div id="panelLeft" class="panel">
     <h2>模組化機械手臂控制台</h2>
     <div class="note">先在「組裝」照實體拼好手臂,解鎖後畫面上的姿態(滑桿 / IK)才會送給實體馬達。黃色箭頭 = 每顆馬達的轉軸方向。</div>
     <div class="row" style="margin-top:6px;">
@@ -62,17 +73,6 @@
         <label><input id="showBoxes" type="checkbox"> 顯示碰撞盒</label>
     </div>
     <div id="loadInfo" class="note"></div>
-
-    <h3>0. 硬體連線</h3>
-    <div class="row"><span id="hwBadge" class="hwBadge off">連線中…</span><span id="hwTotal" class="note"></span></div>
-    <div id="hwCheck" class="note"></div>
-    <div class="row" style="margin-top:6px;">
-        <button id="unlockBtn" class="danger" disabled>🔓 解鎖通電</button>
-        <button id="rescanBtn" class="ghost">重新掃描拓樸</button>
-    </div>
-    <div id="hwArm" class="note">尚未解鎖,畫面只是模擬,不會動到實體馬達</div>
-    <div class="row"><label><input id="autoSend" type="checkbox" checked> 解鎖後把畫面上的姿態送給手臂</label></div>
-    <div id="hwAngles" class="mono"></div>
 
     <h3>1. 組裝</h3>
     <div class="note">從底座開始,一個一個往上接。每接一個,下面就會列出下一個可以接的零件;連接件可以連續接,馬達也可以直接接馬達。橘色圓環 = 下一個零件會接的位置。</div>
@@ -83,14 +83,27 @@
         <div id="nextBtns"></div>
     </div>
 
-    <h3>2. 手動關節角度</h3>
+    <h3>2. 目前狀態(正向運動學)</h3>
+    <div id="readout"></div>
+
+</div>
+<div id="panelRight" class="panel">
+    <h3 class="first">3. 硬體連線</h3>
+    <div class="row"><span id="hwBadge" class="hwBadge off">連線中…</span><span id="hwTotal" class="note"></span></div>
+    <div id="hwCheck" class="note"></div>
+    <div class="row" style="margin-top:6px;">
+        <button id="unlockBtn" class="danger" disabled>🔓 解鎖通電</button>
+        <button id="rescanBtn" class="ghost">重新掃描拓樸</button>
+    </div>
+    <div id="hwArm" class="note">尚未解鎖,畫面只是模擬,不會動到實體馬達</div>
+    <div class="row"><label><input id="autoSend" type="checkbox" checked> 解鎖後把畫面上的姿態送給手臂</label></div>
+    <div id="hwAngles" class="mono"></div>
+
+    <h3>4. 手動關節角度</h3>
     <div id="sliders"></div>
     <div class="row"><button id="zeroBtn" class="ghost">全部歸零(升降模組回最高點)</button></div>
 
-    <h3>3. 目前狀態(正向運動學)</h3>
-    <div id="readout"></div>
-
-    <h3>4. 逆向運動學(DLS 數值解)</h3>
+    <h3>5. 逆向運動學(DLS 數值解)</h3>
     <div class="note">Z 為離地高度(= 數學座標 + 215)。如果這個組法沒辦法同時控制位置和方向,會自動改成「位置優先、方向盡量接近」,並顯示方向差了幾度。</div>
     <div id="dofInfo" class="note" style="margin-top:4px;"></div>
     <div class="grid3" style="margin:6px 0;">
@@ -529,7 +542,9 @@ document.getElementById('ikBtn').onclick = () => {
 
 document.getElementById('showModels').onchange = () => update();
 document.getElementById('showBoxes').onchange = () => update();
-document.getElementById('toggle').onclick = () => document.getElementById('panel').classList.toggle('hidden');
+const panelL = document.getElementById('panelLeft'), panelR = document.getElementById('panelRight');
+document.getElementById('openLeft').onclick = () => { panelR.classList.remove('open'); panelL.classList.toggle('open'); };
+document.getElementById('openRight').onclick = () => { panelL.classList.remove('open'); panelR.classList.toggle('open'); };
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
