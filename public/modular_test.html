@@ -34,16 +34,25 @@
     .grid3 input { width:100%; }
     #readout, #ikResult { font-family: ui-monospace, Consolas, monospace; font-size:11.5px; line-height:1.55; white-space:pre-wrap; }
     .ok { color:var(--ok); } .bad { color:var(--bad); }
+    #collBadge { position:fixed; top:12px; right:12px; padding:6px 12px; border-radius:8px; font-weight:bold; font-size:13px; z-index:4; }
+    #collBadge.safe { background:#1e1e2e; color:var(--ok); border:1px solid var(--ok); }
+    #collBadge.hit { background:var(--bad); color:#111; }
     #toggle { display:none; position:fixed; top:10px; right:10px; z-index:5; }
-    @media (max-width: 600px) { #panel { top:52px; width:auto; right:10px; bottom:auto; max-height:55vh; } #toggle { display:block; } #panel.hidden { display:none; } }
+    @media (max-width: 600px) { #collBadge { top:auto; bottom:12px; } #panel { top:52px; width:auto; right:10px; bottom:auto; max-height:55vh; } #toggle { display:block; } #panel.hidden { display:none; } }
 </style>
 </head>
 <body>
 <div id="view"></div>
+<div id="collBadge"></div>
 <button id="toggle" class="ghost">面板</button>
 <div id="panel">
     <h2>模組化手臂測試頁</h2>
-    <div class="note">純模擬,不會連線、不會送指令給硬體。灰色方塊=馬達 body(以轉軸點為中心),短灰柱=pivot,紫色=連接件,綠色=夾爪,黃色箭頭=每顆馬達的轉軸方向。</div>
+    <div class="note">純模擬,不會連線、不會送指令給硬體。黃色箭頭 = 每顆馬達的轉軸方向。</div>
+    <div class="row" style="margin-top:6px;">
+        <label><input id="showModels" type="checkbox" checked> 顯示 3D 模型</label>
+        <label><input id="showBoxes" type="checkbox"> 顯示碰撞盒</label>
+    </div>
+    <div id="loadInfo" class="note"></div>
 
     <h3>1. 組裝</h3>
     <div class="note">從底座開始,一個一個往上接。每接一個,下面就會列出下一個可以接的零件;連接件可以連續接,馬達也可以直接接馬達。橘色圓環 = 下一個零件會接的位置。</div>
@@ -81,6 +90,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
 <script src="modular_kinematics.js"></script>
 <script>
 const Z_GROUND = PART_LIBRARY.base.groundHeight;
@@ -137,8 +147,110 @@ function addRod(a, b, r, material) {
 }
 function toMatrix4(T) { const m = new THREE.Matrix4(); m.set(...T); return m; }
 
+// ---------- 真實模型(STL) ----------
+// PART_GEO 裡每個 piece 記錄:STL 檔名、R、o(STL座標 → 零件局部座標),在這裡事先把幾何轉好、快取起來
+const stlLoader = new THREE.STLLoader();
+const rawGeo = {}, pieceGeoCache = new Map();
+const MODEL_FILES = [...new Set(JSON.stringify(PART_GEO).match(/"file":"[^"]+"/g).map(x => x.slice(8, -1)))];
+let modelsLoaded = 0, modelsFailed = [];
+MODEL_FILES.forEach(f => stlLoader.load(encodeURI('./' + f),
+    g => { rawGeo[f] = g; modelsLoaded++; updateLoadInfo(); update(); },
+    undefined,
+    () => { modelsFailed.push(f); updateLoadInfo(); }));
+function updateLoadInfo() {
+    const el = document.getElementById('loadInfo');
+    el.innerHTML = modelsLoaded === MODEL_FILES.length ? '' :
+        `模型載入中 ${modelsLoaded}/${MODEL_FILES.length}` + (modelsFailed.length ? `<br><span class="bad">找不到:${modelsFailed.join('、')}(先用簡化外形顯示)</span>` : '');
+}
+function pieceGeo(piece) {
+    if (!rawGeo[piece.file]) return null;
+    if (pieceGeoCache.has(piece)) return pieceGeoCache.get(piece);
+    const g = rawGeo[piece.file].clone();
+    g.translate(-piece.o[0], -piece.o[1], -piece.o[2]);
+    const R = piece.R, m = new THREE.Matrix4().set(R[0][0], R[0][1], R[0][2], 0, R[1][0], R[1][1], R[1][2], 0, R[2][0], R[2][1], R[2][2], 0, 0, 0, 0, 1);
+    g.applyMatrix4(m);
+    if (piece.shiftZ) g.translate(0, 0, piece.shiftZ);
+    g.computeVertexNormals();
+    pieceGeoCache.set(piece, g); return g;
+}
+const modelMat = {
+    base: new THREE.MeshPhongMaterial({ color: 0x585b70 }),
+    body: new THREE.MeshPhongMaterial({ color: 0xf9e2af }),
+    pivot: new THREE.MeshPhongMaterial({ color: 0xa6adc8 }),
+    conn: new THREE.MeshPhongMaterial({ color: 0xcba6f7 }),
+    ee: new THREE.MeshPhongMaterial({ color: 0x94e2d5 }),
+    lift: new THREE.MeshPhongMaterial({ color: 0x89b4fa }),
+    gear: new THREE.MeshPhongMaterial({ color: 0x9399b2 }),
+};
+// 放一個 STL 零件:T = 零件座標系(4x4 row-major),extra = 額外的局部轉換(THREE.Matrix4,可省略)
+function addPiece(piece, T, material, extra) {
+    const g = pieceGeo(piece); if (!g) return false;
+    const mesh = new THREE.Mesh(g, material);
+    mesh.matrixAutoUpdate = false;
+    mesh.matrix.copy(toMatrix4(T)); if (extra) mesh.matrix.multiply(extra);
+    armGroup.add(mesh); return true;
+}
+function allModelsReady(pieces) { return pieces.every(p => rawGeo[p.file]); }
+
+// 用真實模型畫手臂;某個零件的模型還沒載入時,回傳 false 讓呼叫端改畫簡化外形
+function drawModels(fk) {
+    let ri = 0, li = 0, ci = 0;
+    assembly.parts.forEach(part => {
+        if (part.kind === 'motor') {
+            addPiece(PART_GEO.motor.pivot, fk.inputFrames[ri], modelMat.pivot);
+            addPiece(PART_GEO.motor.body, fk.motorFrames[ri], modelMat.body);
+            ri++;
+        } else if (part.kind === 'linear') {
+            const L = fk.linearFrames[li++], lib = PART_LIBRARY.linearModules[part.key];
+            PART_GEO[part.key].pieces.forEach(pc => {
+                let extra = null;
+                if (pc.moving) extra = new THREE.Matrix4().makeTranslation(...lib.travelDir.map(v => v * L.d));
+                if (pc.spin) {
+                    const [cx, cy] = pc.spin.center, a = pc.spin.perMM * L.d;
+                    extra = new THREE.Matrix4().makeTranslation(cx, cy, 0).multiply(new THREE.Matrix4().makeRotationZ(a)).multiply(new THREE.Matrix4().makeTranslation(-cx, -cy, 0));
+                }
+                addPiece(pc, L.Tin, pc.moving ? modelMat.conn : pc.spin ? modelMat.gear : modelMat.lift, extra);
+            });
+        } else {
+            const T = fk.partFrames[ci++].T, geo = PART_GEO[part.key];
+            if (geo) geo.pieces.forEach(pc => addPiece(pc, T, part.kind === 'ee' ? modelMat.ee : modelMat.conn));
+        }
+    });
+}
+const modelsWanted = () => document.getElementById('showModels').checked;
+function modelsReadyFor() {
+    const files = new Set(['底座成品2.stl', PART_GEO.motor.pivot.file, PART_GEO.motor.body.file]);
+    assembly.parts.forEach(p => { if (p.kind !== 'motor' && PART_GEO[p.key]) PART_GEO[p.key].pieces.forEach(pc => files.add(pc.file)); });
+    return [...files].every(f => rawGeo[f]);
+}
+// 碰撞盒顯示(線框):紅 = 正在碰撞的零件
+const boxLineMat = new THREE.LineBasicMaterial({ color: 0x94e2d5, transparent: true, opacity: 0.6 });
+const boxHitMat = new THREE.LineBasicMaterial({ color: 0xf38ba8 });
+function drawBoxes(coll, all) {
+    const hitNames = new Set(coll.hits.flatMap(h => [h.a, h.b]));
+    coll.boxes.forEach(b => {
+        const hit = hitNames.has(b.name);
+        if (!all && !hit) return;
+        const o = b.obb, geo = new THREE.EdgesGeometry(new THREE.BoxGeometry(o.h[0] * 2, o.h[1] * 2, o.h[2] * 2));
+        const line = new THREE.LineSegments(geo, hit ? boxHitMat : boxLineMat);
+        line.matrixAutoUpdate = false;
+        line.matrix.set(o.u[0][0], o.u[1][0], o.u[2][0], o.c[0], o.u[0][1], o.u[1][1], o.u[2][1], o.c[1], o.u[0][2], o.u[1][2], o.u[2][2], o.c[2], 0, 0, 0, 1);
+        armGroup.add(line);
+    });
+}
+
 function drawArm(fk) {
     while (armGroup.children.length) armGroup.remove(armGroup.children[0]);
+    const useModels = modelsWanted() && modelsReadyFor();
+    baseMesh.visible = !useModels;
+    if (useModels) {
+        addPiece(PART_GEO.base.pieces[0], mkIdentity(), modelMat.base);
+        drawModels(fk);
+        fk.motorFrames.forEach(Trot => armGroup.add(new THREE.ArrowHelper(new THREE.Vector3(Trot[2], Trot[6], Trot[10]), new THREE.Vector3(Trot[3], Trot[7], Trot[11]), 110, 0xf9e2af, 14, 8)));
+    } else drawSchematic(fk);
+    drawCommon(fk);
+}
+function drawSchematic(fk) {
     // 馬達:pivot(輸入→轉軸點)+ 以轉軸點為中心的80mm方塊(頂面、側面剛好在+40)
     fk.inputFrames.forEach((Tin, i) => {
         const Trot = fk.motorFrames[i];
@@ -172,6 +284,8 @@ function drawArm(fk) {
         if (o.startsWith('c')) addRod(sk[k - 1].p, sk[k].p, 9, mat.c);
         else if (o === 'ee') addRod(sk[k - 1].p, sk[k].p, 7, mat.ee);
     }
+}
+function drawCommon(fk) {
     // 末端點與方向
     const tip = new THREE.Mesh(new THREE.SphereGeometry(9, 16, 16), mat.tip);
     tip.position.set(...fk.pos); armGroup.add(tip);
@@ -316,9 +430,15 @@ document.getElementById('zeroBtn').onclick = () => { thetas = jointInfo(assembly
 
 const f1 = v => (Math.abs(v) < 0.05 ? 0 : v).toFixed(1);
 const f3 = v => (Math.abs(v) < 5e-4 ? 0 : v).toFixed(3);
+let lastColl = null;
 function update() {
     const fk = modularFK(assembly, thetas);
     drawArm(fk);
+    const coll = modularCollision(assembly, thetas, { fk }); lastColl = coll;
+    drawBoxes(coll, document.getElementById('showBoxes').checked);
+    const badge = document.getElementById('collBadge');
+    badge.className = coll.collided ? 'hit' : 'safe';
+    badge.innerText = coll.collided ? '⚠ 碰撞:' + coll.hits.slice(0, 3).map(h => h.a + ' ↔ ' + h.b).join('、') + (coll.hits.length > 3 ? ' …' : '') : '✔ 無碰撞';
     let s = `末端 (離地)  X ${f1(fk.pos[0])}  Y ${f1(fk.pos[1])}  Z ${f1(fk.pos[2] + Z_GROUND)}\n`;
     s += `末端方向    (${fk.dir.map(f3).join(', ')})\n\n`;
     s += `關節(數學座標):\n`;
@@ -360,6 +480,8 @@ document.getElementById('ikBtn').onclick = () => {
         const de = r.dirErrDeg;
         s += `<span class="${de < 0.5 ? 'ok' : 'bad'}">方向誤差 ${de.toFixed(2)}°</span>${r.mode === 'position-priority' && de >= 0.5 ? (currentDOF.fullControl ? '(這個方向在這個位置到不了)' : '(這個組法的自由度不夠,無法完全對準)') : ''}\n`;
     }
+    if (r.collided) s += `<span class="bad">⚠ 找不到不會碰撞的解,目前顯示的姿態會碰撞:${(r.hits || []).slice(0, 3).map(h => h.a + '↔' + h.b).join('、')}</span>\n`;
+    else s += `<span class="ok">✔ 無碰撞</span>\n`;
     s += `迭代 ${r.iterations} 次,耗時 ${ms.toFixed(0)} ms\n`;
     s += `角度 [${r.thetas.map(v => v.toFixed(1)).join(', ')}]`;
     el.innerHTML = s;
@@ -367,6 +489,8 @@ document.getElementById('ikBtn').onclick = () => {
     update();
 };
 
+document.getElementById('showModels').onchange = () => update();
+document.getElementById('showBoxes').onchange = () => update();
 document.getElementById('toggle').onclick = () => document.getElementById('panel').classList.toggle('hidden');
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();

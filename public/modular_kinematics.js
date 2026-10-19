@@ -92,6 +92,11 @@ const PART_LIBRARY = {
     },
 };
 
+// ---------- 模型與碰撞盒(由 tools/build_parts.py 從 STL 自動產生,請勿手改) ----------
+// pieces: STL 檔 → 零件局部座標: local = R·(v − o);moving = 升降模組會隨 d 移動的部分;spin = 齒輪轉動
+// collision: 零件局部座標下的軸對齊盒 [cx, cy, cz, hx, hy, hz](中心與半邊長, mm)
+const PART_GEO = {"short":{"pieces":[{"file":"短轉接頭.stl","R":[[-1.0,-0.0,-0.0],[0.0,0.0,-1.0],[0.0,-1.0,0.0]],"o":[28.75,28.0,28.75]}],"collision":[[0.0,0.0,-5.0,28.75,28.75,10.0],[0.0,0.0,18.0,28.75,28.75,10.0]]},"rod":{"pieces":[{"file":"延長桿.stl","R":[[-1.0,-0.0,-0.0],[0.0,0.0,-1.0],[0.0,-1.0,0.0]],"o":[144.75,101.3,28.75]}],"collision":[[0.0,0.0,-5.0,28.75,28.75,10.0],[0.0,0.0,18.83,28.75,28.75,10.83],[2.42,0.14,50.87,19.65,16.98,21.2],[13.75,0.01,52.0,13.75,15.23,25.0],[109.17,-0.21,51.99,20.67,15.45,24.99],[112.85,0.0,64.34,20.63,17.46,12.31],[116.0,0.0,88.98,28.75,28.75,12.32]]},"rod2":{"pieces":[{"file":"延長桿2.stl","R":[[-1.0,-0.0,-0.0],[0.0,0.0,-1.0],[0.0,-1.0,0.0]],"o":[68.0,113.8,28.75]}],"collision":[[-0.0,0.0,-3.45,28.75,28.75,11.5],[-0.0,0.0,17.55,28.75,28.75,2.5],[3.51,0.0,81.74,21.01,17.5,21.69],[11.34,-0.24,87.12,11.33,15.58,22.82],[32.6,0.0,85.05,9.9,28.75,28.75],[57.75,0.0,85.05,10.25,28.75,28.75]]},"rod3":{"pieces":[{"file":"延長桿3.stl","R":[[-1.0,-0.0,-0.0],[0.0,0.0,-1.0],[0.0,-1.0,0.0]],"o":[28.75,80.0,28.75]}],"collision":[[0.0,0.0,-3.5,28.75,28.75,11.5],[0.0,0.0,17.5,28.75,28.75,2.5],[0.0,0.0,70.0,28.75,28.75,10.0]]},"rod4":{"pieces":[{"file":"延長桿4.stl","R":[[-1.0,-0.0,-0.0],[0.0,0.0,-1.0],[0.0,-1.0,0.0]],"o":[138.75,44.0,86.0]}],"collision":[[0.0,0.0,-3.5,28.75,28.75,11.5],[-3.95,0.0,29.5,24.8,28.75,14.5],[15.7,0.0,23.5,11.06,28.75,8.5],[28.18,0.0,32.0,0.57,24.5,12.0],[74.71,0.0,26.0,7.46,24.11,18.0],[105.06,0.0,33.5,22.19,28.75,10.5],[110.46,0.0,21.96,28.29,28.75,13.96]]},"scara1":{"pieces":[{"file":"SCARA連接件1.stl","R":[[1.0,-0.0,-0.0],[0.0,0.0,1.0],[0.0,-1.0,0.0]],"o":[28.75,128.5,28.75]}],"collision":[[0.0,0.0,-3.5,28.75,28.75,11.5],[0.0,0.0,17.5,28.75,28.75,2.5],[0.0,0.0,114.25,28.75,28.75,14.25]]},"scara2":{"pieces":[{"file":"SCARA連接件2.stl","R":[[1.0,-0.0,-0.0],[0.0,0.0,1.0],[0.0,-1.0,0.0]],"o":[68.0,173.8,28.75]}],"collision":[[0.0,0.0,-3.45,28.75,28.75,11.5],[0.0,0.0,17.55,28.75,28.75,2.5],[0.0,0.0,40.05,15.0,15.0,0.0],[0.0,0.0,100.05,15.0,15.0,0.0],[-3.5,0.0,141.74,21.0,17.5,21.69],[-11.34,0.24,147.23,11.31,15.58,22.72],[-32.59,0.0,145.05,9.91,28.75,28.75],[-57.75,0.0,145.05,10.25,28.75,28.75]]},"gripper":{"pieces":[{"file":"組合件1.stl","R":[[0.0,-1.0,-0.0],[0.0,0.0,-1.0],[1.0,0.0,0.0]],"o":[15.29,40.34,66.05]}],"collision":[[0.0,-0.0,-1.5,40.0,40.0,13.5],[0.0,-4.0,23.5,19.21,31.0,9.5],[0.0,-0.0,56.49,32.5,65.0,12.91],[0.0,-0.0,83.55,32.5,65.0,13.35],[0.0,0.23,113.4,6.0,46.11,13.5]]},"motor":{"pivot":{"file":"pivot.stl","R":[[1.0,0.0,0.0],[0.0,0.0,-1.0],[0.0,1.0,0.0]],"o":[0,0,0]},"body":{"file":"body.stl","R":[[1.0,0.0,0.0],[0.0,0.0,-1.0],[0.0,1.0,0.0]],"o":[0,0,0],"shiftZ":-48},"collision":{"pivot":[[-0.02,0.0,2.99,34.99,35.0,18.06]],"body":[[-0.14,0.0,1.0,40.11,40.0,40.11]]}},"base":{"pieces":[{"file":"底座成品2.stl","R":[[0.0,0.0,-1.0],[-1.0,0.0,0.0],[0.0,1.0,0.0]],"o":[143.55,215.28,227.75]}],"collision":[[-2.25,14.5,-167.5,100.0,127.5,47.5],[-0.05,-0.02,-10.0,32.95,32.99,10.0]]},"scaraZ":{"pieces":[{"file":"升降_馬達支架.stl","R":[[-1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,-1.0]],"o":[39.97,39.99,106.6]},{"file":"升降_齒輪A.stl","R":[[-1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,-1.0]],"o":[39.0,38.75,78.2],"spin":{"center":[0.25,0.0],"perMM":-0.014814814814814815}},{"file":"升降_齒輪BC.stl","R":[[-1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,-1.0]],"o":[-26.0,23.75,141.9],"spin":{"center":[-49.75,0.0],"perMM":0.044444444444444446}},{"file":"升降_齒條.stl","R":[[0.0,1.0,0.0],[-1.0,0.0,0.0],[0.0,0.0,1.0]],"o":[279.0,380.89,-57.56],"moving":true}],"collision":{"static":[[-27.96,16.56,18.41,67.93,56.55,33.41],[10.37,-2.49,62.5,29.6,37.5,2.5],[-55.31,15.31,63.05,15.28,55.3,3.05],[-83.03,36.69,83.83,12.87,36.42,22.77],[0.25,-0.0,73.2,38.75,38.75,5.0],[-49.75,0.0,80.4,23.75,23.75,14.0]],"moving":[[-135.04,11.0,86.31,31.25,21.5,28.75],[-77.94,2.35,86.88,5.85,23.35,7.5],[-76.49,51.51,86.88,4.4,25.1,7.5],[-76.49,102.07,86.88,4.4,25.38,7.5],[-76.49,152.9,86.88,4.4,25.34,7.5],[-76.49,203.75,86.88,4.4,25.38,7.5],[-76.49,254.14,86.88,4.4,24.86,7.5]]}}};
+
 // ---------- 組裝描述 ----------
 // 組裝 = 從底座開始,一個接一個的零件序列(可以連續接多個連接件,也可以馬達直接接馬達):
 //   { kind:'motor', face: 0|1 }      馬達模組;face = 下一個零件接在它的哪一面(0頂面 / 1側面)
@@ -398,44 +403,156 @@ function modularIK(assembly, targetPos, targetDir, opts = {}) {
     const n = motorCount(assembly);
     if (n === 0) return { thetas: [], errNorm: Infinity, posErr: Infinity, iterations: 0, converged: false, mode: 'none' };
     const dof = opts.dof || analyzeDOF(assembly);
+    const L = jointInfo(assembly);
     const seeds = [
         opts.warmStart,
+        L.map(j => j.home),
         new Array(n).fill(0),
         [30, -30, 30, 0, -30], [-30, 40, -40, 20, 30], [10, -60, 60, -10, -20], [0, 60, -60, 0, 40],
-    ].filter(Boolean).map(s => { const L = jointInfo(assembly); return Array.from({ length: n }, (_, j) => Math.max(L[j].limit[0], Math.min(L[j].limit[1], s[j] || 0))); });
-    const finish = (r, mode) => {
+        [-30, 30, -30, 0, 30], [60, -40, 80, 0, -60], [-60, 40, -80, 0, 60], [90, 20, -50, 45, 20], [-90, -20, 50, -45, -20],
+    ].filter(Boolean).map(s => Array.from({ length: n }, (_, j) => Math.max(L[j].limit[0], Math.min(L[j].limit[1], s[j] ?? 0))));
+    // 碰撞檢查:預設開啟,只接受不會碰撞的解;全部都會碰撞時,回傳最好的那個並標記 collided
+    const avoid = opts.avoidCollision !== false;
+    const collides = th => avoid && modularCollision(assembly, th, { firstOnly: true }).collided;
+    const finish = (r, mode, collided) => {
         const f = modularFK(assembly, r.thetas);
         r.posErr = mkNorm(targetPos.map((v, k) => v - f.pos[k]));
         r.dirErrDeg = targetDir ? mkAngleDeg(f.dir, targetDir) : null;
-        r.mode = mode; r.dof = dof; return r;
+        r.errNorm = r.errNorm ?? r.posErr;
+        r.mode = mode; r.dof = dof; r.collided = !!collided;
+        if (r.collided) r.hits = modularCollision(assembly, r.thetas).hits;
+        return r;
     };
 
     // 1) 沒給方向 → 只求位置
     if (!targetDir) {
-        let best = null;
-        for (const s of seeds) { const r = modularIKAttempt(assembly, s, targetPos.slice(), true, opts); if (!best || r.errNorm < best.errNorm) best = r; if (r.converged) break; }
-        return finish(best, 'position');
+        let best = null, bestColl = null;
+        for (const s of seeds) {
+            const r = modularIKAttempt(assembly, s, targetPos.slice(), true, opts);
+            if (r.converged && !collides(r.thetas)) return finish(r, 'position', false);
+            if (r.converged) { if (!bestColl) bestColl = r; }
+            else if (!best || r.errNorm < best.errNorm) best = r;
+        }
+        return bestColl ? finish(bestColl, 'position', true) : finish(best, 'position', collides(best.thetas));
     }
     // 2) 自由度足夠 → 先試位置+方向同時達成
     const compromise = []; // 位置+方向折衷解,方向通常已經很接近,拿來當位置優先的起點
+    let fullColl = null;
     {
         const dl = mkNorm(targetDir) || 1, tv = [...targetPos, ...targetDir.map(v => v / dl * MK_ORIENT_WEIGHT)];
         for (const s of seeds) {
             const r = modularIKAttempt(assembly, s, tv, false, opts);
-            if (dof.fullControl && r.converged) return finish(r, 'position+direction');
+            if (dof.fullControl && r.converged) {
+                if (!collides(r.thetas)) return finish(r, 'position+direction', false);
+                if (!fullColl) fullColl = r;
+            }
             compromise.push(r.thetas);
             if (!dof.fullControl && compromise.length >= 3) break;
         }
     }
-    // 3) 做不到 → 位置優先、方向盡量接近
-    let best = null;
+    // 3) 做不到(或同時達成的解都會碰撞)→ 位置優先、方向盡量接近
+    let best = null, bestAny = null;
     for (const s of [...compromise, ...seeds]) {
         const r = modularIKPriorityAttempt(assembly, s, targetPos, targetDir, opts);
-        if (!best || (r.converged && !best.converged) || (r.converged === best.converged && (r.converged ? r.dirErrDeg < best.dirErrDeg : r.posErr < best.posErr))) best = r;
-        if (r.converged && r.dirErrDeg < 0.1) break;
+        const better = (x, y) => !y || (x.converged && !y.converged) || (x.converged === y.converged && (x.converged ? x.dirErrDeg < y.dirErrDeg : x.posErr < y.posErr));
+        if (better(r, bestAny)) bestAny = r;
+        if (r.converged && !collides(r.thetas)) {
+            if (better(r, best)) best = r;
+            if (r.dirErrDeg < 0.1) break;
+        }
     }
-    best.errNorm = best.posErr;
-    return finish(best, 'position-priority');
+    if (best) return finish(best, 'position-priority', false);
+    if (fullColl) return finish(fullColl, 'position+direction', true);
+    bestAny.errNorm = bestAny.posErr;
+    return finish(bestAny, 'position-priority', collides(bestAny.thetas));
 }
 
-if (typeof module !== 'undefined') module.exports = { PART_LIBRARY, CURRENT_ARM_ASSEMBLY, SCARA_ASSEMBLY, MAX_MOTORS, motorCount, jointInfo, linearDisplacement, canAppend, modularFK, modularIK, analyzeDOF, mkMul, mkTr, mkRz, mkRy, mkChain };
+// ---------- 碰撞檢查 ----------
+// 做法:每個零件用幾個「盒子」包住(PART_GEO.collision,零件局部座標),依 FK 擺到世界座標變成 OBB,
+//      兩兩用分離軸定理(SAT)檢查有沒有重疊。
+// 剛體分組:兩顆馬達之間的所有東西(上一顆的 body、連接件、下一顆的 pivot)是同一個剛體,同組不互相檢查。
+// 例外:同一個關節兩側本來就接觸的零件(pivot ↔ 自己的 body、升降支架 ↔ 齒條)不檢查。
+// 另外檢查有沒有零件低於地面(離地 0)。
+const MK_COLLISION_MARGIN = 1.0;   // 每個盒子各縮 1mm,避免接合面剛好貼在一起被誤判
+const MK_FLOOR_Z = -PART_LIBRARY.base.groundHeight;
+
+function mkObb(T, box, extraOffset) {
+    const c = extraOffset ? box.slice(0, 3).map((v, k) => v + extraOffset[k]) : box.slice(0, 3);
+    return {
+        c: mkApply(T, c),
+        u: [mkAxisX(T), [T[1], T[5], T[9]], mkAxisZ(T)],
+        h: box.slice(3, 6).map(v => Math.max(0.5, v - MK_COLLISION_MARGIN)),
+    };
+}
+function mkObbOverlap(A, B) { // 分離軸定理:15 條候選軸,任一條能分開就沒碰撞
+    const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+    const cross = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+    const d = [B.c[0]-A.c[0], B.c[1]-A.c[1], B.c[2]-A.c[2]];
+    const axes = [...A.u, ...B.u];
+    for (const a of A.u) for (const b of B.u) { const x = cross(a, b); if (dot(x, x) > 1e-9) axes.push(x); }
+    for (const L of axes) {
+        const rA = A.h[0]*Math.abs(dot(A.u[0], L)) + A.h[1]*Math.abs(dot(A.u[1], L)) + A.h[2]*Math.abs(dot(A.u[2], L));
+        const rB = B.h[0]*Math.abs(dot(B.u[0], L)) + B.h[1]*Math.abs(dot(B.u[1], L)) + B.h[2]*Math.abs(dot(B.u[2], L));
+        if (Math.abs(dot(d, L)) > rA + rB) return false;
+    }
+    return true;
+}
+function mkObbMinZ(o) { return o.c[2] - (o.h[0]*Math.abs(o.u[0][2]) + o.h[1]*Math.abs(o.u[1][2]) + o.h[2]*Math.abs(o.u[2][2])); }
+
+// 回傳所有碰撞盒(世界座標)與分組資訊,畫面上也可以拿來顯示
+function modularCollisionBoxes(assembly, thetas, fk) {
+    fk = fk || modularFK(assembly, thetas);
+    const boxes = [];
+    let g = 0, mi = 0, ri = 0, li = 0, ci = 0;
+    const push = (T, list, info, off) => list.forEach(b => boxes.push({ ...info, obb: mkObb(T, b, off) }));
+    push(PART_LIBRARY.base.T.slice(), PART_GEO.base.collision, { group: 0, name: '底座' });   // 底座盒已是世界座標,T = Rz(270) 只是頂端插孔方向
+    assembly.parts.forEach((part, pi) => {
+        if (part.kind === 'motor') {
+            push(fk.inputFrames[ri], PART_GEO.motor.collision.pivot, { group: g, name: `馬達${mi + 1} pivot`, joint: mi, side: 'a' });
+            g++;
+            push(fk.motorFrames[ri], PART_GEO.motor.collision.body, { group: g, name: `馬達${mi + 1}`, joint: mi, side: 'b' });
+            ri++; mi++;
+        } else if (part.kind === 'linear') {
+            const L = fk.linearFrames[li], lib = PART_LIBRARY.linearModules[part.key];
+            push(L.Tin, PART_GEO[part.key].collision.static, { group: g, name: `${lib.name}(支架)`, joint: mi, side: 'a' });
+            g++;
+            push(L.Tin, PART_GEO[part.key].collision.moving, { group: g, name: `${lib.name}(齒條)`, joint: mi, side: 'b' }, lib.travelDir.map(v => v * L.d));
+            li++; mi++;
+        } else {
+            const T = fk.partFrames[ci++].T;
+            const geo = part.kind === 'ee' ? PART_GEO[part.key] : PART_GEO[part.key];
+            if (geo && geo.collision) push(T, geo.collision, { group: g, name: partNameOf(part) });
+        }
+    });
+    return boxes;
+}
+function partNameOf(part) {
+    if (part.kind === 'motor') return PART_LIBRARY.motor.name;
+    if (part.kind === 'linear') return PART_LIBRARY.linearModules[part.key].name;
+    if (part.kind === 'ee') return PART_LIBRARY.endEffectors[part.key].name;
+    return PART_LIBRARY.connectors[part.key].name;
+}
+// 主函式:{ collided, hits:[{a, b}] , boxes }
+function modularCollision(assembly, thetas, opts = {}) {
+    const boxes = modularCollisionBoxes(assembly, thetas, opts.fk);
+    const hits = [], seen = new Set();
+    for (let i = 0; i < boxes.length; i++) {
+        const A = boxes[i];
+        if (A.group > 0 && mkObbMinZ(A.obb) < MK_FLOOR_Z + 0.5) {
+            if (!seen.has(A.name + '|地面')) { seen.add(A.name + '|地面'); hits.push({ a: A.name, b: '地面' }); }
+            if (opts.firstOnly) return { collided: true, hits, boxes };
+        }
+        for (let j = i + 1; j < boxes.length; j++) {
+            const B = boxes[j];
+            if (A.group === B.group) continue;
+            if (A.joint !== undefined && A.joint === B.joint && A.side !== B.side) continue; // 同一關節兩側本來就接觸
+            if (!mkObbOverlap(A.obb, B.obb)) continue;
+            const key = A.name + '|' + B.name;
+            if (!seen.has(key)) { seen.add(key); hits.push({ a: A.name, b: B.name }); }
+            if (opts.firstOnly) return { collided: true, hits, boxes };
+        }
+    }
+    return { collided: hits.length > 0, hits, boxes };
+}
+
+if (typeof module !== 'undefined') module.exports = { PART_GEO, modularCollision, modularCollisionBoxes, PART_LIBRARY, CURRENT_ARM_ASSEMBLY, SCARA_ASSEMBLY, MAX_MOTORS, motorCount, jointInfo, linearDisplacement, canAppend, modularFK, modularIK, analyzeDOF, mkMul, mkTr, mkRz, mkRy, mkChain };
