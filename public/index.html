@@ -13,6 +13,13 @@
     #panelLeft { left:10px; }
     #panelRight { right:10px; }
     h3.first { border-top:none; padding-top:0; margin-top:2px; }
+    .nodeBox { display:grid; grid-template-columns:auto 1fr; grid-template-rows:auto auto; column-gap:12px; align-items:center; margin-top:10px; padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:var(--field); }
+    .nodeBox .nodeLbl { grid-column:1; grid-row:1; font-size:12px; color:var(--sub); }
+    .nodeBox .nodeNum { grid-column:2; grid-row:1 / span 2; justify-self:end; font-size:30px; font-weight:bold; line-height:1; }
+    .nodeBox .nodeSub { grid-column:1; grid-row:2; font-size:11px; }
+    .nodeBox.ok { border-color:var(--ok); } .nodeBox.ok .nodeNum, .nodeBox.ok .nodeSub { color:var(--ok); }
+    .nodeBox.warn { border-color:var(--bad); } .nodeBox.warn .nodeNum, .nodeBox.warn .nodeSub { color:var(--bad); }
+    .nodeBox.off .nodeNum, .nodeBox.off .nodeSub { color:var(--sub); }
     #mobileBar { display:none; }
     h2 { font-size:15px; margin:0 0 4px; color:var(--accent); }
     h3 { font-size:13px; margin:14px 0 6px; color:var(--accent); border-top:1px solid var(--line); padding-top:10px; }
@@ -73,6 +80,12 @@
         <label><input id="showBoxes" type="checkbox"> 顯示碰撞盒</label>
     </div>
     <div id="loadInfo" class="note"></div>
+
+    <div id="nodeBox" class="nodeBox off">
+        <div class="nodeLbl">系統總節點數</div>
+        <div class="nodeNum" id="nodeNum">—</div>
+        <div class="nodeSub" id="nodeSub">尚未連上 S3</div>
+    </div>
 
     <h3>1. 組裝</h3>
     <div class="note">從底座開始,一個一個往上接。每接一個,下面就會列出下一個可以接的零件;連接件可以連續接,馬達也可以直接接馬達。橘色圓環 = 下一個零件會接的位置。</div>
@@ -651,6 +664,13 @@ function renderHw() {
     badge.innerText = st;
     document.getElementById('hwTotal').innerText = (!hwLost && wsOk) ? `S3 偵測到 ${hwTotal} 顆` : '';
     const n = motorCount(assembly), check = document.getElementById('hwCheck');
+    // 左邊的「系統總節點數」:連上 S3 時顯示偵測到幾顆,並跟組裝的關節數比對
+    const box = document.getElementById('nodeBox'), num = document.getElementById('nodeNum'), sub = document.getElementById('nodeSub');
+    if (!wsOk) { box.className = 'nodeBox off'; num.innerText = '—'; sub.innerText = '伺服器連線中…'; }
+    else if (hwLost) { box.className = 'nodeBox warn'; num.innerText = '—'; sub.innerText = 'S3 主板未連線'; }
+    else if (hwTotal === 0) { box.className = 'nodeBox warn'; num.innerText = '0'; sub.innerText = (hwStatus === 'CONNECTING' ? '掃描拓樸中…' : '沒有偵測到馬達'); }
+    else { box.className = 'nodeBox ' + (countMatches() ? 'ok' : 'warn'); num.innerText = hwTotal;
+        sub.innerText = countMatches() ? `✔ 與組裝一致(${n} 個關節)` : `⚠ 組裝有 ${n} 個關節`; }
     if (!hwLost && wsOk && hwTotal > 0 && !countMatches())
         check.innerHTML = `<span class="bad">⚠ 組裝有 ${n} 個關節,但 S3 偵測到 ${hwTotal} 顆馬達。請照實體修正組裝,數量一致才會送出角度。</span>`;
     else if (!hwLost && wsOk && hwTotal > 0) check.innerHTML = `<span class="ok">✔ 組裝的關節數與 S3 偵測一致(${n} 顆)</span>`;
