@@ -20,6 +20,8 @@
     .nodeBox.ok { border-color:var(--ok); } .nodeBox.ok .nodeNum, .nodeBox.ok .nodeSub { color:var(--ok); }
     .nodeBox.warn { border-color:var(--bad); } .nodeBox.warn .nodeNum, .nodeBox.warn .nodeSub { color:var(--bad); }
     .nodeBox.off .nodeNum, .nodeBox.off .nodeSub { color:var(--sub); }
+    .nodeBox .nodeMix { grid-column:1 / span 2; grid-row:3; font-size:11px; color:var(--sub); margin-top:4px; }
+    .gripBox { margin-top:10px; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:var(--field); }
     #mobileBar { display:none; }
     h2 { font-size:15px; margin:0 0 4px; color:var(--accent); }
     h3 { font-size:13px; margin:14px 0 6px; color:var(--accent); border-top:1px solid var(--line); padding-top:10px; }
@@ -44,7 +46,7 @@
     .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; }
     .grid3 input { width:100%; }
     #readout, #ikResult { font-family: ui-monospace, Consolas, monospace; font-size:11.5px; line-height:1.55; white-space:pre-wrap; }
-    .ok { color:var(--ok); } .bad { color:var(--bad); }
+    .ok { color:var(--ok); } .bad { color:var(--bad); } .warnTxt { color:var(--accent); }
     #collBadge { position:fixed; top:12px; left:50%; transform:translateX(-50%); max-width:calc(100vw - 720px); padding:6px 14px; border-radius:8px; font-weight:bold; font-size:13px; z-index:4; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     #collBadge.safe { background:#1e1e2e; color:var(--ok); border:1px solid var(--ok); }
     #collBadge.hit { background:var(--bad); color:#111; }
@@ -85,6 +87,7 @@
         <div class="nodeLbl">系統總節點數</div>
         <div class="nodeNum" id="nodeNum">—</div>
         <div class="nodeSub" id="nodeSub">尚未連上 S3</div>
+        <div class="nodeMix" id="nodeMix"></div>
     </div>
 
     <h3>1. 組裝</h3>
@@ -111,6 +114,11 @@
     <div id="hwArm" class="note">尚未解鎖,畫面只是模擬,不會動到實體馬達</div>
     <div class="row"><label><input id="autoSend" type="checkbox" checked> 解鎖後把畫面上的姿態送給手臂</label></div>
     <div id="hwAngles" class="mono"></div>
+    <div id="gripBox" class="gripBox">
+        <div class="row" style="justify-content:space-between;"><b>夾爪</b><span id="gripState" class="note">沒有偵測到夾爪節點</span></div>
+        <div class="row" style="margin-top:4px;"><button id="gripOpen" class="ghost" disabled>張開</button><button id="gripGrip" disabled>夾取</button></div>
+        <div id="gripNote" class="note"></div>
+    </div>
 
     <h3>4. 手動關節角度</h3>
     <div id="sliders"></div>
@@ -576,7 +584,7 @@ const SEND_INTERVAL_MS = 100;           // 拖滑桿時最多每 100ms 送一次
 const degToPos = d => Math.max(0, Math.min(1000, Math.round(500 + d / 0.24)));
 const posToDeg = p => (p - 500) * 0.24;
 
-let ws = null, hwStatus = 'OFFLINE', hwPrevStatus = 'OFFLINE', hwTotal = 0, hwTopology = [];
+let ws = null, hwStatus = 'OFFLINE', hwPrevStatus = 'OFFLINE', hwTotal = 0, hwTopology = [], hwGripper = null;
 let gotRealStatus = false, statusPoll = null, watchdog = null, hwLost = true;
 let lastSendTime = 0, sendTimer = null, lastSentKey = '';
 
@@ -600,6 +608,7 @@ function connectWS() {
         hwStatus = data.status;
         hwTotal = data.total || 0;
         hwTopology = data.topology || [];
+        hwGripper = data.gripper || null;
         // 解鎖後 S3 會把所有馬達送回各自的歸零位置 → 網頁模型也一起回到歸零姿態
         if (hwStatus === 'HOMING' && hwPrevStatus !== 'HOMING') {
             thetas = jointInfo(assembly).map(j => j.home); syncSliders(); update();
@@ -607,7 +616,7 @@ function connectWS() {
         // 剛進入 WORKING(歸零完成,或重新打開網頁時手臂已在運作)→ 用 S3 回報的實際角度校正畫面
         if (hwStatus === 'WORKING' && hwPrevStatus !== 'WORKING' && countMatches()) {
             const info = jointInfo(assembly);
-            hwTopology.forEach(n => { const k = n.id - 1; if (k >= 0 && k < thetas.length) thetas[k] = Math.max(info[k].limit[0], Math.min(info[k].limit[1], posToDeg(n.angle))); });
+            hwJointNodes().forEach((n, k) => { if (k < thetas.length) thetas[k] = Math.max(info[k].limit[0], Math.min(info[k].limit[1], posToDeg(n.angle))); });
             lastSentKey = thetas.map(degToPos).join(',');
             syncSliders(); update();
         }
@@ -620,7 +629,18 @@ function resetWatchdog() {
     watchdog = setTimeout(() => { hwLost = true; renderHw(); }, 5000); // S3 平常至少每 1.5 秒廣播一次
 }
 const isArmed = () => !hwLost && hwStatus === 'WORKING';
-const countMatches = () => hwTotal === motorCount(assembly);
+// 節點類型:M = 馬達模組、Z = 升降模組、G = 夾爪(舊版韌體沒回報類型 → 當成 M)
+const nodeTypeOf = n => (n && n.type) || 'M';
+const hwJointNodes = () => hwTopology.filter(n => nodeTypeOf(n) !== 'G');      // 依 ID 順序 = 關節順序
+const hwHasGripper = () => hwTopology.some(n => nodeTypeOf(n) === 'G');
+const asmJointTypes = () => jointInfo(assembly).map(j => j.kind === 'linear' ? 'Z' : 'M');
+const asmHasGripper = () => { const ps = assembly.parts || [], l = ps[ps.length - 1]; return !!(l && l.kind === 'ee' && l.key === 'gripper'); };
+// 關節數一致才送角度(會擋);升降/馬達類型不同、夾爪有沒有接 → 只提醒
+const countMatches = () => hwJointNodes().length === motorCount(assembly);
+const typeMismatches = () => { const a = asmJointTypes(), h = hwJointNodes().map(nodeTypeOf);
+    return a.map((t, k) => (h[k] && h[k] !== t) ? k : -1).filter(k => k >= 0); };
+const TYPE_NAME = { M: '馬達', Z: '升降', G: '夾爪' };
+const GRIP_TEXT = { OPEN: '張開', OPENING: '張開中…', CLOSING: '夾取中…', HOLD: '夾住物體(恆流保持)', CLOSED: '閉合(沒有夾到東西)' };
 
 // 依目前組裝告訴 S3 每顆馬達的歸零位置(升降模組 = −120° → servo 0,其他 = 0° → servo 500)
 function sendHome() { wsSend({ cmd: 'SET_HOME', positions: jointInfo(assembly).map(j => degToPos(j.home)) }); }
@@ -628,7 +648,7 @@ function onAssemblyChanged() { saveAssembly(); sendHome(); renderHw(); }
 
 function sendBlockReason() {
     if (!isArmed()) return '尚未解鎖';
-    if (!countMatches()) return `S3 偵測到 ${hwTotal} 顆,但組裝有 ${motorCount(assembly)} 個關節`;
+    if (!countMatches()) return `S3 偵測到 ${hwJointNodes().length} 個關節節點,但組裝有 ${motorCount(assembly)} 個關節`;
     if (lastColl && lastColl.collided) return '目前姿態會碰撞';
     if (!document.getElementById('autoSend').checked) return '已關閉「送給手臂」';
     return null;
@@ -653,6 +673,8 @@ document.getElementById('unlockBtn').onclick = () => {
     setTimeout(() => wsSend({ cmd: 'UNLOCK' }), 150);
 };
 document.getElementById('rescanBtn').onclick = () => wsSend({ cmd: 'RESCAN' });
+document.getElementById('gripOpen').onclick = () => wsSend({ cmd: 'GRIPPER', action: 'OPEN' });
+document.getElementById('gripGrip').onclick = () => wsSend({ cmd: 'GRIPPER', action: 'GRIP' });
 document.getElementById('autoSend').onchange = () => { renderHw(); requestSend(true); };
 
 const STATUS_TEXT = { READY: '待命(可以解鎖)', HOMING: '歸零中…', WORKING: '已解鎖', CONNECTING: '掃描拓樸中', ERROR: '錯誤', OFFLINE: 'S3 未連線' };
@@ -662,19 +684,29 @@ function renderHw() {
     const st = !wsOk ? '伺服器連線中…' : hwLost ? 'S3 主板離線' : (STATUS_TEXT[hwStatus] || hwStatus);
     badge.className = 'hwBadge ' + (!wsOk ? 'off' : hwLost ? 'lost' : hwStatus);
     badge.innerText = st;
-    document.getElementById('hwTotal').innerText = (!hwLost && wsOk) ? `S3 偵測到 ${hwTotal} 顆` : '';
-    const n = motorCount(assembly), check = document.getElementById('hwCheck');
-    // 左邊的「系統總節點數」:連上 S3 時顯示偵測到幾顆,並跟組裝的關節數比對
+    const live = wsOk && !hwLost;
+    document.getElementById('hwTotal').innerText = live ? `S3 偵測到 ${hwTotal} 個節點` : '';
+    const n = motorCount(assembly), hj = hwJointNodes().length, check = document.getElementById('hwCheck');
+    // 各類型各幾個(例:馬達 4 · 升降 1 · 夾爪 1)
+    const mix = ['M', 'Z', 'G'].map(t => [t, hwTopology.filter(x => nodeTypeOf(x) === t).length]).filter(([, c]) => c > 0)
+        .map(([t, c]) => `${TYPE_NAME[t]} ${c}`).join(' · ');
+    // 左邊的「系統總節點數」:連上 S3 時顯示偵測到幾個節點,並跟組裝的關節數比對
     const box = document.getElementById('nodeBox'), num = document.getElementById('nodeNum'), sub = document.getElementById('nodeSub');
+    document.getElementById('nodeMix').innerText = (live && hwTotal > 0) ? mix : '';
     if (!wsOk) { box.className = 'nodeBox off'; num.innerText = '—'; sub.innerText = '伺服器連線中…'; }
     else if (hwLost) { box.className = 'nodeBox warn'; num.innerText = '—'; sub.innerText = 'S3 主板未連線'; }
-    else if (hwTotal === 0) { box.className = 'nodeBox warn'; num.innerText = '0'; sub.innerText = (hwStatus === 'CONNECTING' ? '掃描拓樸中…' : '沒有偵測到馬達'); }
+    else if (hwTotal === 0) { box.className = 'nodeBox warn'; num.innerText = '0'; sub.innerText = (hwStatus === 'CONNECTING' ? '掃描拓樸中…' : '沒有偵測到任何模組'); }
     else { box.className = 'nodeBox ' + (countMatches() ? 'ok' : 'warn'); num.innerText = hwTotal;
         sub.innerText = countMatches() ? `✔ 與組裝一致(${n} 個關節)` : `⚠ 組裝有 ${n} 個關節`; }
-    if (!hwLost && wsOk && hwTotal > 0 && !countMatches())
-        check.innerHTML = `<span class="bad">⚠ 組裝有 ${n} 個關節,但 S3 偵測到 ${hwTotal} 顆馬達。請照實體修正組裝,數量一致才會送出角度。</span>`;
-    else if (!hwLost && wsOk && hwTotal > 0) check.innerHTML = `<span class="ok">✔ 組裝的關節數與 S3 偵測一致(${n} 顆)</span>`;
-    else check.innerHTML = '';
+    const warns = [];
+    if (live && hwTotal > 0) {
+        if (!countMatches()) warns.push(`<span class="bad">⚠ 組裝有 ${n} 個關節,但 S3 偵測到 ${hj} 個關節節點(${mix})。請照實體修正組裝,數量一致才會送出角度。</span>`);
+        else warns.push(`<span class="ok">✔ 組裝的關節數與 S3 偵測一致(${n} 個)</span>`);
+        typeMismatches().forEach(k => warns.push(`<span class="warnTxt">提醒:關節 ${k + 1} 組裝是「${TYPE_NAME[asmJointTypes()[k]]}」,實體回報「${TYPE_NAME[nodeTypeOf(hwJointNodes()[k])]}」(升降模組的 C3 要燒 NODE_TYPE ":Z")</span>`));
+        if (asmHasGripper() && !hwHasGripper()) warns.push('<span class="warnTxt">提醒:組裝有夾爪,但沒偵測到夾爪節點</span>');
+        if (!asmHasGripper() && hwHasGripper()) warns.push('<span class="warnTxt">提醒:偵測到夾爪節點,但組裝末端不是夾爪</span>');
+    }
+    check.innerHTML = warns.join('<br>');
     const unlock = document.getElementById('unlockBtn');
     unlock.disabled = !(wsOk && !hwLost && hwStatus === 'READY' && countMatches());
     const arm = document.getElementById('hwArm');
@@ -686,9 +718,21 @@ function renderHw() {
     else arm.innerHTML = '尚未解鎖,畫面只是模擬,不會動到實體馬達';
     // 實體各顆角度
     const info = jointInfo(assembly);
-    document.getElementById('hwAngles').innerText = (!hwLost && hwTopology.length) ?
-        '實體角度:' + hwTopology.map(t => { const deg = posToDeg(t.angle), j = info[t.id - 1];
-            return `\nID ${t.id}: ${deg.toFixed(1)}°` + (j && j.kind === 'linear' ? `(下降 ${linearDisplacement(j.key, deg).toFixed(1)} mm)` : ''); }).join('') : '';
+    const jn = hwJointNodes();
+    document.getElementById('hwAngles').innerText = (!hwLost && jn.length) ?
+        '實體角度:' + jn.map((t, k) => { const deg = posToDeg(t.angle), j = info[k];
+            return `\n關節${k + 1}(ID ${t.id}): ${deg.toFixed(1)}°` + (j && j.kind === 'linear' ? `(下降 ${linearDisplacement(j.key, deg).toFixed(1)} mm)` : ''); }).join('') : '';
+    // 夾爪
+    const g = hwHasGripper() ? (hwGripper || { id: (hwTopology.find(x => nodeTypeOf(x) === 'G') || {}).id }) : null;
+    const gs = document.getElementById('gripState'), gn = document.getElementById('gripNote');
+    const canGrip = !!g && isArmed();
+    document.getElementById('gripOpen').disabled = !canGrip;
+    document.getElementById('gripGrip').disabled = !canGrip;
+    if (!live || !g) { gs.innerText = live ? '沒有偵測到夾爪節點' : '—'; gn.innerText = ''; }
+    else {
+        gs.innerHTML = `ID ${g.id} · <b>${GRIP_TEXT[g.state] || g.state || '等待回報…'}</b>` + (g.mA != null ? ` · ${g.mA} mA` : '');
+        gn.innerText = canGrip ? '夾爪上的實體按鈕也可以切換張開/夾取' : '解鎖通電後才能控制夾爪';
+    }
 }
 var hwReady = true;
 connectWS();
