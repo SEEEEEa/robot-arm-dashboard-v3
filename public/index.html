@@ -125,7 +125,7 @@
     <div class="row"><button id="zeroBtn" class="ghost">全部歸零(升降模組回最高點)</button></div>
 
     <h3>5. 逆向運動學(DLS 數值解)</h3>
-    <div class="note">Z 為離地高度(= 數學座標 + 215)。如果這個組法沒辦法同時控制位置和方向,會自動改成「位置優先、方向盡量接近」,並顯示方向差了幾度。</div>
+    <div class="note">Z 為離地高度(= 數學座標 + <span id="zNote">215</span>)。如果這個組法沒辦法同時控制位置和方向,會自動改成「位置優先、方向盡量接近」,並顯示方向差了幾度。</div>
     <div id="dofInfo" class="note" style="margin-top:4px;"></div>
     <div class="grid3" style="margin:6px 0;">
         <label>X<input id="ikX" type="number" value="300"></label>
@@ -147,13 +147,15 @@
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
 <script src="modular_kinematics.js"></script>
 <script>
-const Z_GROUND = PART_LIBRARY.base.groundHeight;
+// 插孔離地高度:依組裝選的底座(底座 215 / 底座接頭 105)
+const zGround = () => baseOf(assembly).groundHeight;
 
 // ---------- 狀態 ----------
 // 上次使用的組裝會記在這台電腦的瀏覽器裡,重新打開網頁不用再拼一次(讀不到就用目前實體手臂)
 function loadSavedAssembly() {
     try {
         const a = JSON.parse(localStorage.getItem('modularArm.assembly'));
+        if (a && a.base && !PART_LIBRARY.bases[a.base]) delete a.base;
         if (a && Array.isArray(a.parts) && a.parts.every(p => p.kind === 'motor' ? PART_LIBRARY.motor.faces[p.face] :
             p.kind === 'linear' ? PART_LIBRARY.linearModules[p.key] : p.kind === 'ee' ? PART_LIBRARY.endEffectors[p.key] : PART_LIBRARY.connectors[p.key])) return a;
     } catch (e) {}
@@ -180,16 +182,22 @@ controls.update();
 scene.add(new THREE.AmbientLight(0xffffff, 0.55));
 const sun = new THREE.DirectionalLight(0xffffff, 0.8); sun.position.set(500, -700, 1200); scene.add(sun);
 
-// 地板(離地 0 = 數學座標 -215)
+// 地板(離地 0 = 數學座標 −插孔高度)
 const grid = new THREE.GridHelper(1400, 28, 0x585b70, 0x313244);
-grid.rotation.x = Math.PI / 2; grid.position.z = -Z_GROUND; scene.add(grid);
+grid.rotation.x = Math.PI / 2; scene.add(grid);
 // 世界座標軸(以底座插孔為原點): X紅 Y綠 Z藍
 [[1,0,0,0xf38ba8],[0,1,0,0xa6e3a1],[0,0,1,0x89b4fa]].forEach(([x,y,z,c]) =>
     scene.add(new THREE.ArrowHelper(new THREE.Vector3(x,y,z), new THREE.Vector3(0,0,0), 160, c, 14, 8)));
-// 底座圓柱
-const baseGeo = new THREE.CylinderGeometry(70, 80, Z_GROUND, 32);
-const baseMesh = new THREE.Mesh(baseGeo, new THREE.MeshPhongMaterial({ color: 0x585b70 }));
-baseMesh.rotation.x = Math.PI / 2; baseMesh.position.z = -Z_GROUND / 2; scene.add(baseMesh);
+// 底座簡化外形(模型還沒載入時顯示):高度 1 的圓柱,依底座種類拉長
+const baseMesh = new THREE.Mesh(new THREE.CylinderGeometry(70, 80, 1, 32), new THREE.MeshPhongMaterial({ color: 0x585b70 }));
+baseMesh.rotation.x = Math.PI / 2; scene.add(baseMesh);
+// 換底座時:地板、簡化外形跟著改高度
+function applyBaseHeight() {
+    const h = zGround();
+    grid.position.z = -h;
+    baseMesh.scale.set(1, h, 1); baseMesh.position.z = -h / 2;
+    const n = document.getElementById('zNote'); if (n) n.innerText = h;
+}
 
 const armGroup = new THREE.Group(); scene.add(armGroup);
 const mat = {
@@ -283,7 +291,7 @@ function drawModels(fk) {
 }
 const modelsWanted = () => document.getElementById('showModels').checked;
 function modelsReadyFor() {
-    const files = new Set(['底座成品2.stl', PART_GEO.motor.pivot.file, PART_GEO.motor.body.file]);
+    const files = new Set([...PART_GEO[baseOf(assembly).geo].pieces.map(pc => pc.file), PART_GEO.motor.pivot.file, PART_GEO.motor.body.file]);
     assembly.parts.forEach(p => { if (p.kind !== 'motor' && PART_GEO[p.key]) PART_GEO[p.key].pieces.forEach(pc => files.add(pc.file)); });
     return [...files].every(f => rawGeo[f]);
 }
@@ -308,7 +316,7 @@ function drawArm(fk) {
     const useModels = modelsWanted() && modelsReadyFor();
     baseMesh.visible = !useModels;
     if (useModels) {
-        addPiece(PART_GEO.base.pieces[0], mkIdentity(), modelMat.base);
+        PART_GEO[baseOf(assembly).geo].pieces.forEach(pc => addPiece(pc, mkIdentity(), modelMat.base));
         drawModels(fk);
         fk.motorFrames.forEach(Trot => armGroup.add(new THREE.ArrowHelper(new THREE.Vector3(Trot[2], Trot[6], Trot[10]), new THREE.Vector3(Trot[3], Trot[7], Trot[11]), 110, 0xf9e2af, 14, 8)));
     } else drawSchematic(fk);
@@ -384,7 +392,15 @@ function motorIndexOf(pi) {
 }
 
 function buildChain() {
-    chainEl.innerHTML = '<div class="card base"><span class="idx">0</span><span class="name">底座</span></div>';
+    chainEl.innerHTML = '';
+    // 第 0 個:底座(可以選兩種)
+    const bc = document.createElement('div'); bc.className = 'card base';
+    bc.innerHTML = '<span class="idx">0</span><span class="name">底座</span>';
+    const bs = document.createElement('select'); bs.title = '選擇底座種類(只影響插孔離地高度與底座外形)';
+    Object.entries(PART_LIBRARY.bases).forEach(([k, v]) => bs.add(new Option(`${v.name}(離地 ${v.groundHeight})`, k)));
+    bs.value = assembly.base || 'tall';
+    bs.onchange = () => { if (bs.value === 'tall') delete assembly.base; else assembly.base = bs.value; refreshAll(); };
+    bc.appendChild(bs); chainEl.appendChild(bc);
     assembly.parts.forEach((part, pi) => {
         const card = document.createElement('div'); card.className = 'card';
         const mi = motorIndexOf(pi);
@@ -475,21 +491,23 @@ function updateDOF() {
          : d.dirDOF === 0 ? '<span class="bad">只能控制位置,方向完全由位置決定</span>'
          : '<span class="bad">位置可控,方向只能調整一部分(通常是仰角),只能盡量接近</span>');
 }
-function refreshAll() { ikTarget = null; buildChain(); buildSliders(); updateDOF(); update(); onAssemblyChanged(); }
+function refreshAll() { ikTarget = null; applyBaseHeight(); buildChain(); buildSliders(); updateDOF(); update(); onAssemblyChanged(); }
 
+// 載入範例 / 清空時,保留目前選的底座
+function withBase(a) { if (assembly.base) a.base = assembly.base; return a; }
 document.getElementById('presetScara').onclick = () => {
-    assembly = JSON.parse(JSON.stringify(SCARA_ASSEMBLY));
+    assembly = withBase(JSON.parse(JSON.stringify(SCARA_ASSEMBLY)));
     thetas = jointInfo(assembly).map(j => j.home);
     refreshAll();
     // SCARA 夾爪固定朝下:IK 預設改成不指定方向
     document.getElementById('useDir').checked = false; document.getElementById('useDir').onchange();
 };
 document.getElementById('presetCurrent').onclick = () => {
-    assembly = JSON.parse(JSON.stringify(CURRENT_ARM_ASSEMBLY));
+    assembly = withBase(JSON.parse(JSON.stringify(CURRENT_ARM_ASSEMBLY)));
     thetas = jointInfo(assembly).map(j => j.home);
     refreshAll();
 };
-document.getElementById('clearBtn').onclick = () => { assembly = { parts: [] }; thetas = []; refreshAll(); };
+document.getElementById('clearBtn').onclick = () => { assembly = withBase({ parts: [] }); thetas = []; refreshAll(); };
 document.getElementById('zeroBtn').onclick = () => { thetas = jointInfo(assembly).map(j => j.home); syncSliders(); update(); requestSend(true); };
 
 const f1 = v => (Math.abs(v) < 0.05 ? 0 : v).toFixed(1);
@@ -503,7 +521,7 @@ function update() {
     const badge = document.getElementById('collBadge');
     badge.className = coll.collided ? 'hit' : 'safe';
     badge.innerText = coll.collided ? '⚠ 碰撞:' + coll.hits.slice(0, 3).map(h => h.a + ' ↔ ' + h.b).join('、') + (coll.hits.length > 3 ? ' …' : '') : '✔ 無碰撞';
-    let s = `末端 (離地)  X ${f1(fk.pos[0])}  Y ${f1(fk.pos[1])}  Z ${f1(fk.pos[2] + Z_GROUND)}\n`;
+    let s = `末端 (離地)  X ${f1(fk.pos[0])}  Y ${f1(fk.pos[1])}  Z ${f1(fk.pos[2] + zGround())}\n`;
     s += `末端方向    (${fk.dir.map(f3).join(', ')})\n\n`;
     s += `關節(數學座標):\n`;
     const rows = [];
@@ -526,7 +544,7 @@ useDir.onchange = () => document.getElementById('dirInputs').style.opacity = use
 document.getElementById('ikFromTip').onclick = () => {
     const fk = modularFK(assembly, thetas);
     ['ikX', 'ikY'].forEach((id, k) => document.getElementById(id).value = fk.pos[k].toFixed(1));
-    document.getElementById('ikZ').value = (fk.pos[2] + Z_GROUND).toFixed(1);
+    document.getElementById('ikZ').value = (fk.pos[2] + zGround()).toFixed(1);
     dYaw.value = Math.round(Math.atan2(fk.dir[1], fk.dir[0]) * 180 / Math.PI);
     dPitch.value = Math.round(Math.asin(Math.max(-1, Math.min(1, fk.dir[2]))) * 180 / Math.PI);
     showDirLabels();
@@ -534,7 +552,7 @@ document.getElementById('ikFromTip').onclick = () => {
 document.getElementById('ikBtn').onclick = () => {
     if (!motorCount(assembly)) { document.getElementById('ikResult').innerHTML = '<span class="bad">還沒有馬達,無法求解</span>'; return; }
     const v = id => +document.getElementById(id).value;
-    const pos = [v("ikX"), v("ikY"), v("ikZ") - Z_GROUND];
+    const pos = [v("ikX"), v("ikY"), v("ikZ") - zGround()];
     const dir = useDir.checked ? dirFromAngles() : null;
     ikTarget = pos;
     const t0 = performance.now();
