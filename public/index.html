@@ -42,7 +42,8 @@
     #nextBtns button:disabled { opacity:0.35; cursor:not-allowed; }
     .slider { margin-bottom:4px; }
     .slider .lbl { display:flex; justify-content:space-between; }
-    .slider input { width:100%; }
+    .slider input[type=range] { width:100%; }
+    .slider .num { width:64px; padding:1px 4px; margin-right:4px; }
     .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; }
     .grid3 input { width:100%; }
     #readout, #ikResult { font-family: ui-monospace, Consolas, monospace; font-size:11.5px; line-height:1.55; white-space:pre-wrap; }
@@ -120,7 +121,7 @@
         <div id="gripNote" class="note"></div>
     </div>
 
-    <h3>4. 手動關節角度</h3>
+    <h3>4. 手動關節位置(LX-224:0~1000)</h3>
     <div id="sliders"></div>
     <div class="row"><button id="zeroBtn" class="ghost">全部歸零(升降模組回最高點)</button></div>
 
@@ -163,6 +164,11 @@ function loadSavedAssembly() {
 }
 function saveAssembly() { try { localStorage.setItem('modularArm.assembly', JSON.stringify(assembly)); } catch (e) {} }
 let assembly = loadSavedAssembly();
+// LX-224 位置單位:0~1000,500 = 0°,1 單位 = 0.24°。介面一律用整數位置操作,
+// thetas(度)只拿來算運動學,而且永遠等於某個整數位置換算出來的值 → 畫面上的姿態 = 實際送給馬達的位置
+const degToPos = d => Math.max(0, Math.min(1000, Math.round(500 + d / 0.24)));
+const posToDeg = p => (p - 500) * 0.24;
+const quantizeDeg = d => posToDeg(degToPos(d));
 let thetas = jointInfo(assembly).map(j => j.home);
 let ikTarget = null;
 
@@ -463,19 +469,27 @@ function buildSliders() {
     thetas.forEach((_, i) => {
         const j = info[i], w = document.createElement('div'); w.className = 'slider';
         const label = j.kind === 'linear' ? `馬達${i + 1}(${PART_LIBRARY.linearModules[j.key].name})` : `馬達${i + 1}`;
-        w.innerHTML = `<div class="lbl"><span>${label}</span><span id="sv${i}"></span></div>
-                       <input id="s${i}" type="range" min="${j.limit[0]}" max="${j.limit[1]}" step="1" value="${thetas[i]}">`;
+        const lo = degToPos(j.limit[0]), hi = degToPos(j.limit[1]);
+        w.innerHTML = `<div class="lbl"><span>${label}</span><span><input id="n${i}" class="num" type="number" min="${lo}" max="${hi}" step="1"><span id="sv${i}" class="note"></span></span></div>
+                       <input id="s${i}" type="range" min="${lo}" max="${hi}" step="1" value="${degToPos(thetas[i])}">`;
         slidersEl.appendChild(w);
-        w.querySelector('input').oninput = e => { thetas[i] = +e.target.value; update(); requestSend(false); };
+        w.querySelector('#s' + i).oninput = e => { thetas[i] = posToDeg(+e.target.value); update(); requestSend(false); };
+        // 直接輸入數字:按 Enter 或離開輸入框時套用(超出範圍會自動夾回)
+        w.querySelector('#n' + i).onchange = e => {
+            const p = Math.max(lo, Math.min(hi, Math.round(+e.target.value || 0)));
+            e.target.value = p; thetas[i] = posToDeg(p); syncSliders(); update(); requestSend(true);
+        };
     });
     syncSliders();
 }
 function syncSliders() {
     thetas.forEach((t, i) => {
         const s = document.getElementById('s' + i), v = document.getElementById('sv' + i);
-        if (s) s.value = t;
+        const p = degToPos(t), n = document.getElementById('n' + i);
+        if (s) s.value = p;
+        if (n && document.activeElement !== n) n.value = p;
         if (v) { const j = jointInfo(assembly)[i];
-            v.innerText = j && j.kind === 'linear' ? `${t.toFixed(1)}°  → 下降 ${linearDisplacement(j.key, t).toFixed(1)} mm` : t.toFixed(1) + '°'; }
+            v.innerText = j && j.kind === 'linear' ? ` (${t.toFixed(2)}°,下降 ${linearDisplacement(j.key, t).toFixed(1)} mm)` : ` (${t.toFixed(2)}°)`; }
     });
 }
 let currentDOF = { motors: 0, posDOF: 0, dirDOF: 0, fullControl: false };
@@ -549,6 +563,27 @@ document.getElementById('ikFromTip').onclick = () => {
     dPitch.value = Math.round(Math.asin(Math.max(-1, Math.min(1, fk.dir[2]))) * 180 / Math.PI);
     showDirLabels();
 };
+// 取整後再微調:每個關節試 ±1 位置,誤差變小就採用(不接受會碰撞的),最多幾輪
+function refineIntegerPose(q, pos, dir) {
+    const info = jointInfo(assembly), W = 120;
+    const cost = t => { const f = modularFK(assembly, t);
+        let c = Math.hypot(...f.pos.map((v, k) => v - pos[k]));
+        if (dir) c += W * Math.hypot(...f.dir.map((v, k) => v - dir[k]));
+        return c; };
+    let best = cost(q), cur = q.slice();
+    for (let pass = 0; pass < 4; pass++) {
+        let improved = false;
+        for (let k = 0; k < cur.length; k++) for (const dp of [1, -1]) {
+            const pk = degToPos(cur[k]) + dp;
+            if (pk < degToPos(info[k].limit[0]) || pk > degToPos(info[k].limit[1])) continue;
+            const t = cur.slice(); t[k] = posToDeg(pk);
+            const c = cost(t);
+            if (c < best - 1e-9 && !modularCollision(assembly, t, { firstOnly: true }).collided) { best = c; cur = t; improved = true; }
+        }
+        if (!improved) break;
+    }
+    return cur;
+}
 document.getElementById('ikBtn').onclick = () => {
     if (!motorCount(assembly)) { document.getElementById('ikResult').innerHTML = '<span class="bad">還沒有馬達,無法求解</span>'; return; }
     const v = id => +document.getElementById(id).value;
@@ -559,8 +594,13 @@ document.getElementById('ikBtn').onclick = () => {
     const r = modularIK(assembly, pos, dir, { warmStart: thetas, dof: currentDOF });
     const ms = performance.now() - t0;
     const el = document.getElementById('ikResult');
-    const fk = modularFK(assembly, r.thetas);
+    // 解出來的角度取到最接近的整數位置(馬達實際只能到這些位置),誤差、碰撞都用取整後的姿態重算
+    const q = refineIntegerPose(r.thetas.map(quantizeDeg), pos, dir);
+    const fk = modularFK(assembly, q);
     const pErr = Math.hypot(...fk.pos.map((v, k) => v - pos[k]));
+    if (dir) r.dirErrDeg = Math.acos(Math.max(-1, Math.min(1, fk.dir[0] * dir[0] + fk.dir[1] * dir[1] + fk.dir[2] * dir[2]))) * 180 / Math.PI;
+    const qc = modularCollision(assembly, q, { fk });
+    r.collided = qc.collided; r.hits = qc.hits;
     const MODE = { 'position': '只求位置', 'position+direction': '位置+方向 都達成', 'position-priority': '位置優先,方向盡量接近' };
     let s = `<span class="${r.converged ? 'ok' : 'bad'}">${r.converged ? '✔ 位置到達' : '✘ 位置到不了(顯示最接近的姿態)'}</span>\n`;
     s += `模式 ${MODE[r.mode] || r.mode}\n`;
@@ -572,9 +612,9 @@ document.getElementById('ikBtn').onclick = () => {
     if (r.collided) s += `<span class="bad">⚠ 找不到不會碰撞的解,目前顯示的姿態會碰撞:${(r.hits || []).slice(0, 3).map(h => h.a + '↔' + h.b).join('、')}</span>\n`;
     else s += `<span class="ok">✔ 無碰撞</span>\n`;
     s += `迭代 ${r.iterations} 次,耗時 ${ms.toFixed(0)} ms\n`;
-    s += `角度 [${r.thetas.map(v => v.toFixed(1)).join(', ')}]`;
+    s += `位置 [${q.map(degToPos).join(', ')}]`;
     el.innerHTML = s;
-    thetas = r.thetas.slice();
+    thetas = q;
     update();
     requestSend(true);
 };
@@ -599,8 +639,6 @@ window.addEventListener('resize', () => {
 // ======================================================================
 const WS_URL = 'wss://robot-arm-dashboard-v3.onrender.com';
 const SEND_INTERVAL_MS = 100;           // 拖滑桿時最多每 100ms 送一次(最後一次一定會送出)
-const degToPos = d => Math.max(0, Math.min(1000, Math.round(500 + d / 0.24)));
-const posToDeg = p => (p - 500) * 0.24;
 
 let ws = null, hwStatus = 'OFFLINE', hwPrevStatus = 'OFFLINE', hwTotal = 0, hwTopology = [], hwGripper = null;
 let gotRealStatus = false, statusPoll = null, watchdog = null, hwLost = true;
@@ -738,8 +776,8 @@ function renderHw() {
     const info = jointInfo(assembly);
     const jn = hwJointNodes();
     document.getElementById('hwAngles').innerText = (!hwLost && jn.length) ?
-        '實體角度:' + jn.map((t, k) => { const deg = posToDeg(t.angle), j = info[k];
-            return `\n關節${k + 1}(ID ${t.id}): ${deg.toFixed(1)}°` + (j && j.kind === 'linear' ? `(下降 ${linearDisplacement(j.key, deg).toFixed(1)} mm)` : ''); }).join('') : '';
+        '實體位置:' + jn.map((t, k) => { const deg = posToDeg(t.angle), j = info[k];
+            return `\n關節${k + 1}(ID ${t.id}): ${t.angle}(${deg.toFixed(2)}°` + (j && j.kind === 'linear' ? `,下降 ${linearDisplacement(j.key, deg).toFixed(1)} mm` : '') + ')'; }).join('') : '';
     // 夾爪
     const g = hwHasGripper() ? (hwGripper || { id: (hwTopology.find(x => nodeTypeOf(x) === 'G') || {}).id }) : null;
     const gs = document.getElementById('gripState'), gn = document.getElementById('gripNote');
