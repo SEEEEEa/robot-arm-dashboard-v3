@@ -21,6 +21,7 @@
     .nodeBox.warn { border-color:var(--bad); } .nodeBox.warn .nodeNum, .nodeBox.warn .nodeSub { color:var(--bad); }
     .nodeBox.off .nodeNum, .nodeBox.off .nodeSub { color:var(--sub); }
     .nodeBox .nodeMix { grid-column:1 / span 2; grid-row:3; font-size:11px; color:var(--sub); margin-top:4px; }
+    .autoTag { font-size:10px; color:var(--ok); border:1px solid var(--ok); border-radius:4px; padding:0 4px; margin-left:4px; white-space:nowrap; }
     .gripBox { margin-top:10px; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:var(--field); }
     #mobileBar { display:none; }
     h2 { font-size:15px; margin:0 0 4px; color:var(--accent); }
@@ -417,8 +418,11 @@ function buildChain() {
             fs.title = '下一個零件接在這顆馬達的哪一面';
             Object.entries(PART_LIBRARY.motor.faces).forEach(([k, v]) => fs.add(new Option(`往下接${v.name}`, k)));
             fs.value = part.face;
+            fs.dataset.mi = mi;                       // renderHw 用:實體偵測到連接面時鎖定這個選單
             fs.onchange = () => { part.face = +fs.value; updateDOF(); update(); onAssemblyChanged(); };
             card.appendChild(fs);
+            const at = document.createElement('span'); at.className = 'autoTag'; at.dataset.mi = mi; at.innerText = '實體偵測';
+            card.appendChild(at);
         }
         const x = document.createElement('button'); x.className = 'x'; x.innerText = '✕'; x.title = '拿掉這個零件';
         x.onclick = () => {
@@ -505,7 +509,7 @@ function updateDOF() {
          : d.dirDOF === 0 ? '<span class="bad">只能控制位置,方向完全由位置決定</span>'
          : '<span class="bad">位置可控,方向只能調整一部分(通常是仰角),只能盡量接近</span>');
 }
-function refreshAll() { ikTarget = null; applyBaseHeight(); buildChain(); buildSliders(); updateDOF(); update(); onAssemblyChanged(); }
+function refreshAll() { syncFacesFromHw(); ikTarget = null; applyBaseHeight(); buildChain(); buildSliders(); updateDOF(); update(); onAssemblyChanged(); }
 
 // 載入範例 / 清空時,保留目前選的底座
 function withBase(a) { if (assembly.base) a.base = assembly.base; return a; }
@@ -665,6 +669,9 @@ function connectWS() {
         hwTotal = data.total || 0;
         hwTopology = data.topology || [];
         hwGripper = data.gripper || null;
+        // 拓樸(節點、類型、連接面)有變 → 依實體偵測重設組裝裡每顆馬達往下接的面
+        const topoKey = hwTopology.map(n => `${n.id}:${n.face}:${nodeTypeOf(n)}`).join(',');
+        if (topoKey !== lastTopoKey) { lastTopoKey = topoKey; if (syncFacesFromHw().length) refreshAll(); }
         // 解鎖後 S3 會把所有馬達送回各自的歸零位置 → 網頁模型也一起回到歸零姿態
         if (hwStatus === 'HOMING' && hwPrevStatus !== 'HOMING') {
             thetas = jointInfo(assembly).map(j => j.home); syncSliders(); update();
@@ -693,6 +700,28 @@ const asmJointTypes = () => jointInfo(assembly).map(j => j.kind === 'linear' ? '
 const asmHasGripper = () => { const ps = assembly.parts || [], l = ps[ps.length - 1]; return !!(l && l.kind === 'ee' && l.key === 'gripper'); };
 // 關節數一致才送角度(會擋);升降/馬達類型不同、夾爪有沒有接 → 只提醒
 const countMatches = () => hwJointNodes().length === motorCount(assembly);
+// 連接面自動偵測:每顆 C3 掃描下游時會記下是從哪一面(0 頂面 / 1 側面)找到下一個模組,S3 廣播在 topology[].face。
+// 中間隔著連接件也一樣(連接件只是把線接過去)。最後一顆後面沒有模組時是 -1 → 偵測不到,照手動選的。
+// 實體 ID 順序 = 組裝順序,所以組裝還沒裝完(關節比實體少)時,前面已經裝的馬達也能先帶入;組裝比實體多就不套用
+let lastTopoKey = '';
+function hwFaceFor(mi) {
+    if (hwLost || !hwTopology.length || motorCount(assembly) > hwJointNodes().length) return null;
+    const n = hwJointNodes()[mi];
+    if (!n || nodeTypeOf(n) !== 'M') return null;
+    const f = +n.face;
+    return (f === 0 || f === 1) ? f : null;
+}
+function syncFacesFromHw() {
+    const changed = [];
+    assembly.parts.forEach((p, pi) => {
+        if (p.kind !== 'motor') return;
+        const mi = motorIndexOf(pi), f = hwFaceFor(mi);
+        if (f !== null && p.face !== f) { p.face = f; changed.push(`馬達${mi + 1} → ${PART_LIBRARY.motor.faces[f].name}`); }
+    });
+    if (changed.length) { faceChangeNote = '已依實體自動改成:' + changed.join('、'); faceChangeAt = Date.now(); }
+    return changed;
+}
+let faceChangeNote = '', faceChangeAt = 0;
 const typeMismatches = () => { const a = asmJointTypes(), h = hwJointNodes().map(nodeTypeOf);
     return a.map((t, k) => (h[k] && h[k] !== t) ? k : -1).filter(k => k >= 0); };
 const TYPE_NAME = { M: '馬達', Z: '升降', G: '夾爪' };
@@ -761,6 +790,20 @@ function renderHw() {
         typeMismatches().forEach(k => warns.push(`<span class="warnTxt">提醒:關節 ${k + 1} 組裝是「${TYPE_NAME[asmJointTypes()[k]]}」,實體回報「${TYPE_NAME[nodeTypeOf(hwJointNodes()[k])]}」(升降模組的 C3 要燒 NODE_TYPE ":Z")</span>`));
         if (asmHasGripper() && !hwHasGripper()) warns.push('<span class="warnTxt">提醒:組裝有夾爪,但沒偵測到夾爪節點</span>');
         if (!asmHasGripper() && hwHasGripper()) warns.push('<span class="warnTxt">提醒:偵測到夾爪節點,但組裝末端不是夾爪</span>');
+    }
+    // 連接面:偵測得到的就鎖定選單並標「實體偵測」,偵測不到的(斷線、關節數不一致、最後一顆)照手動
+    const detected = [];
+    document.querySelectorAll('#chain select[data-mi]').forEach(sel => {
+        const mi = +sel.dataset.mi, f = hwFaceFor(mi), tag = document.querySelector(`#chain .autoTag[data-mi="${mi}"]`);
+        sel.disabled = f !== null;
+        sel.title = f !== null ? '連接面由實體偵測,不用手動選' : '下一個零件接在這顆馬達的哪一面';
+        if (tag) tag.style.display = f !== null ? '' : 'none';
+        if (f !== null) detected.push(`馬達${mi + 1} ${PART_LIBRARY.motor.faces[f].name}`);
+    });
+    if (live && hwTotal > 0) {
+        if (detected.length) warns.push(`<span class="ok">✔ 連接面由實體偵測:${detected.join('、')}</span>`);
+        else if (motorCount(assembly) > hj) warns.push('<span class="note">組裝的關節比實體多,連接面先照手動選的</span>');
+        if (faceChangeNote && Date.now() - faceChangeAt < 10000) warns.push(`<span class="warnTxt">${faceChangeNote}</span>`);
     }
     check.innerHTML = warns.join('<br>');
     const unlock = document.getElementById('unlockBtn');
