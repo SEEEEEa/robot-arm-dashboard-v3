@@ -21,6 +21,8 @@
     .nodeBox.warn { border-color:var(--bad); } .nodeBox.warn .nodeNum, .nodeBox.warn .nodeSub { color:var(--bad); }
     .nodeBox.off .nodeNum, .nodeBox.off .nodeSub { color:var(--sub); }
     .nodeBox .nodeMix { grid-column:1 / span 2; grid-row:3; font-size:11px; color:var(--sub); margin-top:4px; }
+    .gcTag { font-size:11px; margin-left:6px; white-space:nowrap; cursor:pointer; }
+    .gcTag input { vertical-align:middle; margin:0 2px 0 0; }
     .autoTag { font-size:10px; color:var(--ok); border:1px solid var(--ok); border-radius:4px; padding:0 4px; margin-left:4px; white-space:nowrap; }
     .gripBox { margin-top:10px; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:var(--field); }
     #mobileBar { display:none; }
@@ -260,6 +262,7 @@ const modelMat = {
     ee: new THREE.MeshPhongMaterial({ color: 0x94e2d5 }),
     lift: new THREE.MeshPhongMaterial({ color: 0x89b4fa }),
     gear: new THREE.MeshPhongMaterial({ color: 0x9399b2 }),
+    gc: new THREE.MeshPhongMaterial({ color: 0xf5c2e7 }),
 };
 // 放一個 STL 零件:T = 零件座標系(4x4 row-major),extra = 額外的局部轉換(THREE.Matrix4,可省略)
 function addPiece(piece, T, material, extra) {
@@ -278,6 +281,7 @@ function drawModels(fk) {
         if (part.kind === 'motor') {
             addPiece(PART_GEO.motor.pivot, fk.inputFrames[ri], modelMat.pivot);
             addPiece(PART_GEO.motor.body, fk.motorFrames[ri], modelMat.body);
+            if (part.gc && canHaveGC(part)) addPiece(PART_GEO.gravityComp.pieces[0], fk.motorFrames[ri], modelMat.gc);
             ri++;
         } else if (part.kind === 'linear') {
             const L = fk.linearFrames[li++], lib = PART_LIBRARY.linearModules[part.key];
@@ -299,7 +303,8 @@ function drawModels(fk) {
 const modelsWanted = () => document.getElementById('showModels').checked;
 function modelsReadyFor() {
     const files = new Set([...PART_GEO[baseOf(assembly).geo].pieces.map(pc => pc.file), PART_GEO.motor.pivot.file, PART_GEO.motor.body.file]);
-    assembly.parts.forEach(p => { if (p.kind !== 'motor' && PART_GEO[p.key]) PART_GEO[p.key].pieces.forEach(pc => files.add(pc.file)); });
+    assembly.parts.forEach(p => { if (p.kind !== 'motor' && PART_GEO[p.key]) PART_GEO[p.key].pieces.forEach(pc => files.add(pc.file));
+        if (p.gc && canHaveGC(p)) PART_GEO.gravityComp.pieces.forEach(pc => files.add(pc.file)); });
     return [...files].every(f => rawGeo[f]);
 }
 // 碰撞盒顯示(線框):紅 = 正在碰撞的零件
@@ -336,6 +341,11 @@ function drawSchematic(fk) {
         addRod([Tin[3], Tin[7], Tin[11]], [Trot[3], Trot[7], Trot[11]], 12, mat.pivot);
         const box = new THREE.Mesh(new THREE.BoxGeometry(80, 80, 80), mat.body);
         box.applyMatrix4(toMatrix4(Trot)); armGroup.add(box);
+        const mp = assembly.parts.filter(p => p.kind === 'motor')[i];
+        if (mp && mp.gc && canHaveGC(mp)) PART_GEO.gravityComp.collision.forEach(([cx, cy, cz, hx, hy, hz]) => {
+            const gb = new THREE.Mesh(new THREE.BoxGeometry(hx * 2, hy * 2, hz * 2), modelMat.gc);
+            gb.position.set(cx, cy, cz); box.add(gb);   // box 已經在轉軸點座標系
+        });
         box.add(new THREE.LineSegments(new THREE.EdgesGeometry(box.geometry), new THREE.LineBasicMaterial({ color: 0x313244 })));
         // 標示側面(紅點)方便對照實體
         const mark = new THREE.Mesh(new THREE.SphereGeometry(7, 12, 12), new THREE.MeshPhongMaterial({ color: 0xf38ba8 }));
@@ -419,10 +429,18 @@ function buildChain() {
             Object.entries(PART_LIBRARY.motor.faces).forEach(([k, v]) => fs.add(new Option(`往下接${v.name}`, k)));
             fs.value = part.face;
             fs.dataset.mi = mi;                       // renderHw 用:實體偵測到連接面時鎖定這個選單
-            fs.onchange = () => { part.face = +fs.value; updateDOF(); update(); onAssemblyChanged(); };
+            fs.onchange = () => { part.face = +fs.value; if (!canHaveGC(part)) delete part.gc; syncGcBoxes(); updateDOF(); update(); onAssemblyChanged(); };
             card.appendChild(fs);
             const at = document.createElement('span'); at.className = 'autoTag'; at.dataset.mi = mi; at.innerText = '實體偵測';
             card.appendChild(at);
+            // 重力補償:插在頂面,所以只有往下接側面的馬達可以裝
+            const gl = document.createElement('label'); gl.className = 'gcTag';
+            const gc = document.createElement('input'); gc.type = 'checkbox'; gc.dataset.gcmi = mi;
+            gc.checked = !!part.gc && canHaveGC(part); gc.disabled = !canHaveGC(part);
+            gl.title = canHaveGC(part) ? '在這顆馬達的頂面裝重力補償機構(配重),會納入碰撞檢查' : '重力補償要插在頂面:這顆馬達往下接側面時才能裝';
+            gc.onchange = () => { if (gc.checked) part.gc = true; else delete part.gc; update(); onAssemblyChanged(); };
+            gl.append(gc, '重力補償');
+            card.appendChild(gl);
         }
         const x = document.createElement('button'); x.className = 'x'; x.innerText = '✕'; x.title = '拿掉這個零件';
         x.onclick = () => {
@@ -711,12 +729,21 @@ function hwFaceFor(mi) {
     const f = +n.face;
     return (f === 0 || f === 1) ? f : null;
 }
+// 連接面改變後,同步重力補償勾選框(頂面被佔用就不能裝)
+function syncGcBoxes() {
+    document.querySelectorAll('#chain input[data-gcmi]').forEach(cb => {
+        const pi = assembly.parts.findIndex((p, k) => p.kind === 'motor' && motorIndexOf(k) === +cb.dataset.gcmi);
+        const p = assembly.parts[pi]; if (!p) return;
+        cb.disabled = !canHaveGC(p); cb.checked = !!p.gc && canHaveGC(p);
+        cb.parentElement.title = canHaveGC(p) ? '在這顆馬達的頂面裝重力補償機構(配重),會納入碰撞檢查' : '重力補償要插在頂面:這顆馬達往下接側面時才能裝';
+    });
+}
 function syncFacesFromHw() {
     const changed = [];
     assembly.parts.forEach((p, pi) => {
         if (p.kind !== 'motor') return;
         const mi = motorIndexOf(pi), f = hwFaceFor(mi);
-        if (f !== null && p.face !== f) { p.face = f; changed.push(`馬達${mi + 1} → ${PART_LIBRARY.motor.faces[f].name}`); }
+        if (f !== null && p.face !== f) { p.face = f; if (!canHaveGC(p)) delete p.gc; changed.push(`馬達${mi + 1} → ${PART_LIBRARY.motor.faces[f].name}`); }
     });
     if (changed.length) { faceChangeNote = '已依實體自動改成:' + changed.join('、'); faceChangeAt = Date.now(); }
     return changed;
